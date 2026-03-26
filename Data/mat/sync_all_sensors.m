@@ -1,5 +1,5 @@
-function [t_sync, Delta, dtheta, dv, gps_gt, gps_mea, baro_h, flow_v, dist_h] = ...
-    sync_all_sensors(imu_tbl, gps_tbl, baro_tbl, flow_tbl, dist_tbl)
+function [t_sync, Delta, dtheta, dv, gps_gt, gps_mea, baro_h, flow_v, dist_h, q_sync] = ...
+    sync_all_sensors(imu_tbl, gps_tbl, baro_tbl, flow_tbl, dist_tbl, att_tbl)
 %SYNC_ALL_SENSORS Align multiple PX4 sensor data to the highest frequency sensor
 %
 % INPUTS:
@@ -8,6 +8,7 @@ function [t_sync, Delta, dtheta, dv, gps_gt, gps_mea, baro_h, flow_v, dist_h] = 
 %   baro_tbl  - Barometer table, first column timestamp, height/pressure/temp
 %   flow_tbl  - Optical flow table, first column timestamp, velocity data
 %   dist_tbl  - Distance sensor table, first column timestamp, height
+%   att_tbl   - Attitude table, first column timestamp, 2-5: quaternions
 %
 % OUTPUTS:
 %   t_sync    - unified time vector
@@ -19,6 +20,7 @@ function [t_sync, Delta, dtheta, dv, gps_gt, gps_mea, baro_h, flow_v, dist_h] = 
 %   baro_h    - barometer height (m)
 %   flow_v    - optical flow velocity in body 2-3, and ned 4-5 (m/s)
 %   dist_h    - distance sensor height (m)
+%   q_sync    - synchronized quaternions
 
 %% 1. 提取时间
 t_imu  = imu_tbl(:,1)* 1e-6;
@@ -26,15 +28,16 @@ t_gps  = gps_tbl(:,1)* 1e-6;
 t_baro = baro_tbl(:,1)* 1e-6;
 t_flow = flow_tbl(:,1)* 1e-6;
 t_dist = dist_tbl(:,1)* 1e-6;
+t_att  = att_tbl(:,1)* 1e-6;
 
 %% Step 2: Determine highest frequency sensor
 dt_list = [median(diff(t_imu)), median(diff(t_gps)), ...
-           median(diff(t_baro)), median(diff(t_flow)), median(diff(t_dist))];
+           median(diff(t_baro)), median(diff(t_flow)), median(diff(t_dist)), median(diff(t_att))];
 [dt_min, ~] = min(dt_list);
 
 % Generate unified time axis within common overlapping interval
-t_start = max([t_imu(1), t_gps(1), t_baro(1), t_flow(1), t_dist(1)]);
-t_end   = min([t_imu(end), t_gps(end), t_baro(end), t_flow(end), t_dist(end)]);
+t_start = max([t_imu(1), t_gps(1), t_baro(1), t_flow(1), t_dist(1), t_att(1)]);
+t_end   = min([t_imu(end), t_gps(end), t_baro(end), t_flow(end), t_dist(end), t_att(end)]);
 t_sync  = (t_start : dt_min : t_end)';
 
 %% 3. 对齐 IMU 数据
@@ -87,6 +90,9 @@ flow_v = interp1(t_flow, flow_tbl(:,2:5), t_sync, 'linear', 'extrap'); % x/y vel
 
 %% 7. 对齐 Distance sensor
 dist_h = interp1(t_dist, dist_tbl(:,2), t_sync, 'linear', 'extrap');   % 高度
+
+%% 8. 对齐 Attitude (Quaternions)
+q_sync = interp1(t_att, att_tbl(:,2:5), t_sync, 'linear', 'extrap');
 
 Delta = round(1/dt_min); % frequence
 end

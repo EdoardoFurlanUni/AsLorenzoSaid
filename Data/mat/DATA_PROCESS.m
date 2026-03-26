@@ -11,7 +11,7 @@ folder_num = input('Please enter the data number to be read:','s');
 % 50_2025-10-18-11-09-00
 
 % Constructing a folder path
-base_path = 'D:\Project\UAV_c_estimate\CODE_UAV_c_estimation\UAV_c_estimation_2025_10_29\data\mat';
+base_path = fileparts(mfilename('fullpath'));
 folder_name = sprintf('log_%s', folder_num);
 full_folder_path = fullfile(base_path, folder_name);
 
@@ -60,6 +60,16 @@ baro1 = readtable(file_baro);
 % Pressure [Pa] and Temperature [C]
 baro_tbl = table2array(baro1(:,[2,4,5])); 
 
+%%%%%%%%%%%%%%%%%%%%%%%%% Attitude %%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Concatenate the full file path
+file_att = fullfile(full_folder_path, sprintf('log_%s_vehicle_attitude_0.csv', folder_num));
+
+% data
+att = readtable(file_att);
+% 1: Timestamp
+% 3-6: Quaternions q[0], q[1], q[2], q[3]
+att_tbl = table2array(att(:,[1,3:6]));
+
 %%%%%%%%%%%%%%%%%%%%%%%%% Optical flow and Distance %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Optical flow data
 % Concatenate the full file path
@@ -82,8 +92,8 @@ dist=readtable(file_dist);
 dist_tbl = table2array(dist(:,[1,5])); 
 
 %% Alignment
-[t_sync, Delta, dtheta, dv, gps_gt, gps_mea, baro_h, flow_v, dist_h] = ...
-    sync_all_sensors(imu_tbl, gps_tbl, baro_tbl, flow_tbl, dist_tbl);
+[t_sync, Delta, dtheta, dv, gps_gt, gps_mea, baro_h, flow_v, dist_h, q_sync] = ...
+    sync_all_sensors(imu_tbl, gps_tbl, baro_tbl, flow_tbl, dist_tbl, att_tbl);
 
 % t_sync : unified time vector
 % Delta  : Data frequence
