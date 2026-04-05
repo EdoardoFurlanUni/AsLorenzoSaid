@@ -15,12 +15,31 @@ This project focuses on **Learning Dynamical Systems**, specifically for **Optic
 - **`project/`**: Contains specific analysis and verification tasks.
 - **`presentation/`**: Presentation materials for the course.
 
-## Project Tasks
+## Project Tasks (Detailed Breakdown)
 
-The project is organized into several tasks located in the `project/` directory:
+The project is organized into several sequential tasks located in the `project/` directory. Each task builds up the physical implementation of a **GPS-Denied** UAV filtering structure using Optical Flow and Barometer data.
 
-- **Task 1**: `optical_flow_model.m` - Implementation of the optical flow state-space model.
-- **Task 2**: `task2.m` - Accuracy verification of the optical flow model.
+### **Task 1: Optical Flow Model (`optical_flow_model.m`)**
+- **Objective:** Definition of the physical State-Space model for the Optical Flow tracking.
+- **Details:** Maps how the unrotated NED (North-East-Down) Earth velocities translate into the local `Body X` and `Body Y` speeds measured by the bottom-facing camera, applying the necessary Rotational Matrices obtained from Quaternions.
+
+### **Task 2: Model Accuracy Verification (`task2.m`)**
+- **Objective:** Validating that our physical model ($h(x)$) accurately translates the real world without errors.
+- **Details:** Evaluates the `optical_flow_model` by dynamically feeding it the exact Ground Truth GPS Velocities and the PX4 estimated Quaternions (`q_sync`). The resulting predicted `v_body` velocities seamlessly match the real raw sensor flows from the dataset, verifying that the algebraic matrices inside `func_h` and `func_f` are mathematically sound.
+
+### **Task 3: EKF & UKF Implementation (`task3.m`)**
+- **Objective:** State approximation through Extended and Unscented Kalman Filtering.
+- **Engineering Changes:**
+  - **Rejection of Symbolic Calculation:** We bypassed the original pre-packaged `EKF.m` template because its internal usage of `subs()` (Symbolic Substitution) would require roughly 10 hours for 400 iterations. We generated ultra-fast binary compiled numerical blocks using `matlabFunction()`, retaining execution times within fractions of a second.
+  - **IMU Handling:** We specifically injected the raw gyro and accel matrices (`U_i` Control Inputs) within the prediction loop to follow $x_{k+1} = f(x_k, u_k, dt)$.
+  - **Filter Tuning:** In GPS-Denied modes, heading (Yaw) becomes strictly unobservable via generic models, generating expected but contained "drift". We compensated for Barometer discretization noise increasing standard deviations to enforce strong covariance checks. Forced quaternion normalization is applied to each closure loop to circumvent norm divergence.
+
+### **Task 4: Robust Filtering - REKF & RUKF (`task4.m`)**
+- **Objective:** Implement **Robust** filtering variations against sensor outliers (glitches, spikes in distances, or lens scale mismatches).
+- **Engineering Changes:**
+  - Standard files (`REKF.m` and `RUKF.m` found in `filters/`) were not natively usable for dynamical systems taking time-varying inputs.
+  - We generated two separate robust scripts: **`REKF_fast.m`** and **`RUKF_fast.m`**, optimizing them.
+  - **Matrix Fault Protection:** Calculating least-favorable bounding (Robust estimation by multiplying matrices natively shrinks them boundedly) exposed mathematical vulnerabilities to $10^{-16}$ float discrepancies causing `Matrix must be positive definite` closures (`chol()` explosions). We protected the filters by implementing strict SVD bounding constraints (`svd()`) and direct algebraic inverse avoidance ($V * (I - \theta V)^{-1}$), making the robust logic practically indestructible to numerical spikes.
 
 ## Data Handling
 

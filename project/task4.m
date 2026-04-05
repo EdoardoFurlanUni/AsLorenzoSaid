@@ -9,7 +9,7 @@ addpath(project_dir, filters_dir, utils_dir);
 % 1. Load the pre-processed synchronized data
 load('../Data/mat/data_sync.mat');
 
-T = 400; % Simulation steps (4 seconds at 100Hz)
+T = 6000; % Simulation steps (4 seconds at 100Hz)
 dt_val = 1/Delta;
 
 % 2. Define Symbolic Vectors and Equations
@@ -101,6 +101,7 @@ subplot(3, 1, 2);
 plot(time_axis, gps_ve, 'k-', 'LineWidth', 1.5, 'DisplayName', 'GPS (Ground Truth)'); hold on;
 plot(time_axis, Xrekf(6, :), 'b--', 'LineWidth', 1.2, 'DisplayName', 'REKF');
 plot(time_axis, Xrukf(6, :), 'r-.', 'LineWidth', 1.2, 'DisplayName', 'RUKF');
+plot(time_axis, flow_v(1:T+1, 3), 'g:', 'LineWidth', 1.5, 'DisplayName', 'PX4 EKF (Optical Flow Only)');
 xlabel('Time (s)'); ylabel('v_E (m/s)'); title('East Velocity v_E');
 legend('Location', 'best'); grid on;
 
