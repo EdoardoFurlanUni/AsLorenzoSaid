@@ -45,6 +45,10 @@ t_sync  = (t_start : dt_min : t_end)';
 omega = interp1(t_imu, imu_tbl(:,2:4), t_sync, 'linear', 'extrap');  % angular rates
 acc   = interp1(t_imu, imu_tbl(:,5:7), t_sync, 'linear', 'extrap');  % linear accelerations
 
+% APPLIED LOW-PASS (MOVING AVERAGE) TO REMOVE PROPELLER VIBRATION NOISE
+omega = movmean(omega, 15, 1); % Smooths over ~0.15 seconds
+acc   = movmean(acc, 15, 1);
+
 % Convert rates to 100Hz filter increments correctly scaled
 Delta_freq = round(1/dt_min); % 100 Hz
 dtheta = omega / Delta_freq;

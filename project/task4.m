@@ -44,9 +44,10 @@ x0 = [q_sync(start_idx,:)';         % Initial Attitude
 
 P0 = diag([1e-4*ones(4,1); 0.1*ones(3,1); 0.1*ones(3,1); 1e-6*ones(3,1); 1e-4*ones(3,1)]);
 
-% Noise Covariances
-B_mat = diag([1e-3*ones(4,1); 0.2*ones(3,1); 0.01*ones(3,1); 1e-7*ones(3,1); 1e-5*ones(3,1)]);
-D_mat = diag([0.05; 0.05; 5.0; 0.3]); % [flow vbx | flow vby | baro vd | dist pd]
+% Noise Covariances (Tuning for smoother tracking)
+% - Aggressively decreased velocity process noise (from 0.05 to 0.01)
+B_mat = diag([1e-3*ones(4,1); 0.01*ones(3,1); 0.01*ones(3,1); 1e-7*ones(3,1); 1e-5*ones(3,1)]);
+D_mat = diag([0.15; 0.15; 5.0; 0.5]); % [flow vbx | flow vby | baro vd | dist pd]
 
 % Compute vertical velocity vd from barometer
 baro_h_smooth = movmean(baro_h(:,1), 20);          
