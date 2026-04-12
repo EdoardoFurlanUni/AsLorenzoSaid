@@ -9,7 +9,8 @@ addpath(project_dir, filters_dir, utils_dir);
 % 1. Load the pre-processed synchronized data
 load('../Data/mat/data_sync.mat');
 
-T = 3000; % Simulation steps (4 seconds at 100Hz)
+start_idx = 2000; % Start evaluation earlier (sample 1000 is 10s) 
+T = 1000; % Simulate for 50 seconds (fits within the 6935 total length)
 dt_val = 1/Delta;
 
 % 2. Define Symbolic Vectors and Equations - all the same as task3
@@ -35,9 +36,9 @@ h_jac_sym = jacobian(h_sym, sym_x);
 h_jac_num = matlabFunction(h_jac_sym, 'Vars', {sym_x});
 
 % 3. Initialize Variables
-x0 = [q_sync(1,:)';         % Initial Attitude
-      gps_mea(1, 1:3)';     % Initial Velocity (NED)
-      gps_mea(1, 4:6)';     % Initial Position (NED)
+x0 = [q_sync(start_idx,:)';         % Initial Attitude
+      gps_mea(start_idx, 1:3)';     % Initial Velocity (NED)
+      gps_mea(start_idx, 4:6)';     % Initial Position (NED)
       zeros(3,1);           % Gyro bias
       zeros(3,1)];          % Accel bias
 
@@ -52,10 +53,10 @@ baro_h_smooth = movmean(baro_h(:,1), 20);
 baro_vd       = -[0; diff(baro_h_smooth)] * Delta; 
 
 % Measurement Vector y: [v_body_x; v_body_y; v_ned_z; p_d]
-y_meas = [flow_v(1:T, 1:2), baro_vd(1:T), dist_h(1:T)]';
+y_meas = [flow_v(start_idx:start_idx+T-1, 1:2), baro_vd(start_idx:start_idx+T-1), dist_h(start_idx:start_idx+T-1)]';
 
 % Input Matrix U for filters
-U = [dtheta(1:T, :)'; dv(1:T, :)'];
+U = [dtheta(start_idx:start_idx+T-1, :)'; dv(start_idx:start_idx+T-1, :)'];
 
 Q = B_mat*B_mat'; 
 R = D_mat*D_mat';
@@ -83,10 +84,10 @@ fprintf('RUKF finished in %.4f seconds.\n', t_rukf);
 % 5. Visualization
 % -------------------------------------------------------------
 % Extract GPS Ground Truth for plotting
-gps_vn = gps_mea(1:T+1, 1);
-gps_ve = gps_mea(1:T+1, 2);
-dist_truth = dist_h(1:T+1);
-time_axis = t_sync(1:T+1) - t_sync(1);
+gps_vn = gps_mea(start_idx:start_idx+T, 1);
+gps_ve = gps_mea(start_idx:start_idx+T, 2);
+dist_truth = dist_h(start_idx:start_idx+T);
+time_axis = t_sync(start_idx:start_idx+T) - t_sync(start_idx);
 
 figure('Name', 'Robust Filters: Velocity Tracking', 'NumberTitle', 'off');
 
@@ -101,12 +102,12 @@ subplot(3, 1, 2);
 plot(time_axis, gps_ve, 'k-', 'LineWidth', 1.5, 'DisplayName', 'GPS (Ground Truth)'); hold on;
 plot(time_axis, Xrekf(6, :), 'b--', 'LineWidth', 1.2, 'DisplayName', 'REKF');
 plot(time_axis, Xrukf(6, :), 'r-.', 'LineWidth', 1.2, 'DisplayName', 'RUKF');
-plot(time_axis, flow_v(1:T+1, 3), 'g:', 'LineWidth', 1.5, 'DisplayName', 'PX4 EKF (Optical Flow Only)');
+plot(time_axis, flow_v(start_idx:start_idx+T, 3), 'g:', 'LineWidth', 1.5, 'DisplayName', 'PX4 EKF (Optical Flow Only)');
 xlabel('Time (s)'); ylabel('v_E (m/s)'); title('East Velocity v_E');
 legend('Location', 'best'); grid on;
 
 subplot(3, 1, 3);
-plot(time_axis, baro_vd(1:T+1), 'k-', 'LineWidth', 1, 'DisplayName', 'Barometer v_D (Derived)'); hold on;
+plot(time_axis, baro_vd(start_idx:start_idx+T), 'k-', 'LineWidth', 1, 'DisplayName', 'Barometer v_D (Derived)'); hold on;
 plot(time_axis, Xrekf(7, :), 'b--', 'LineWidth', 1.5, 'DisplayName', 'REKF');
 plot(time_axis, Xrukf(7, :), 'r-.', 'LineWidth', 1.5, 'DisplayName', 'RUKF');
 xlabel('Time (s)'); ylabel('v_D (m/s)'); title('Down Velocity v_D');

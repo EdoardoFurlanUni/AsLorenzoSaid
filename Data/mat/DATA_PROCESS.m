@@ -24,7 +24,17 @@ imu = readtable(file_IMU);
 % 2:    Timestamp
 % 5-7:  IMU angular increments [rad] in body
 % 8-10: IMU velocity increments [m/s] in body
-imu_tbl = table2array(imu(:,[2,5:10]));   
+% 11-12: dt for angle and velocity [us]
+
+% Convert increments to true rates (rad/s and m/s^2) using exact delta_t
+dt_ang = table2array(imu(:,11)) * 1e-6;
+dt_vel = table2array(imu(:,12)) * 1e-6;
+
+rate_ang = table2array(imu(:,5:7)) ./ dt_ang;
+rate_vel = table2array(imu(:,8:10)) ./ dt_vel;
+
+% Save as rates in imu_tbl
+imu_tbl = [table2array(imu(:,2)), rate_ang, rate_vel];
 
 %%%%%%%%%%%%%%%%%%%%%%% GPS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Concatenate the full file path

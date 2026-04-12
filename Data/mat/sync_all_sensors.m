@@ -40,9 +40,15 @@ t_start = max([t_imu(1), t_gps(1), t_baro(1), t_flow(1), t_dist(1), t_att(1)]);
 t_end   = min([t_imu(end), t_gps(end), t_baro(end), t_flow(end), t_dist(end), t_att(end)]);
 t_sync  = (t_start : dt_min : t_end)';
 
-%% 3. 对齐 IMU 数据
-dtheta = interp1(t_imu, imu_tbl(:,2:4), t_sync, 'linear', 'extrap');  % angular increments
-dv     = interp1(t_imu, imu_tbl(:,5:7), t_sync, 'linear', 'extrap');  % velocity increments
+%% 3. Align IMU Data and compute correct Filter Increments
+% imu_tbl now contains exact rates (rad/s and m/s^2) thanks to DATA_PROCESS.m
+omega = interp1(t_imu, imu_tbl(:,2:4), t_sync, 'linear', 'extrap');  % angular rates
+acc   = interp1(t_imu, imu_tbl(:,5:7), t_sync, 'linear', 'extrap');  % linear accelerations
+
+% Convert rates to 100Hz filter increments correctly scaled
+Delta_freq = round(1/dt_min); % 100 Hz
+dtheta = omega / Delta_freq;
+dv = acc / Delta_freq;
 
 %% 4. 对齐 GPS 数据
 % 假设 gps_tbl(:,5:7) 是位置 NED, (:,2:4) 是速度 NED
