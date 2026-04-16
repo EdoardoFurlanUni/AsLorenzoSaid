@@ -85,3 +85,6 @@ legend('Location', 'best');
 grid on;
 
 sgtitle('Task 2: Optical Flow Model Verification (GPS-Free)');
+
+saveas(gcf, 'Task2.png')
+saveas(gcf, 'Task2', 'epsc')

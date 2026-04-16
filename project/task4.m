@@ -114,6 +114,9 @@ plot(time_axis, Xrukf(7, :), 'r-.', 'LineWidth', 1.5, 'DisplayName', 'RUKF');
 xlabel('Time (s)'); ylabel('v_D (m/s)'); title('Down Velocity v_D');
 legend('Location', 'best'); grid on;
 
+saveas(gcf, 'Task4_vel.png')
+saveas(gcf, 'Task4_vel', 'epsc')
+
 figure('Name', 'Robust Filters: Altitude Tracking', 'NumberTitle', 'off');
 plot(time_axis, dist_truth, 'k-', 'LineWidth', 1.5, 'DisplayName', 'Distance Sensor (Raw)'); hold on;
 plot(time_axis, Xrekf(10, :), 'b--', 'LineWidth', 1.2, 'DisplayName', 'REKF');
@@ -121,8 +124,14 @@ plot(time_axis, Xrukf(10, :), 'r-.', 'LineWidth', 1.2, 'DisplayName', 'RUKF');
 xlabel('Time (s)'); ylabel('p_d (m)'); title('Altitude Tracking (Down Position)');
 legend('Location', 'best'); grid on;
 
+saveas(gcf, 'Task4_alt.png')
+saveas(gcf, 'Task4_alt', 'epsc')
+
 figure('Name', 'Robust Parameters Over Time', 'NumberTitle', 'off');
 plot(time_axis(1:end-1), th_rekf, 'b-', 'DisplayName', 'REKF \theta'); hold on;
 plot(time_axis(1:end-1), th_rukf, 'r-', 'DisplayName', 'RUKF \theta');
 xlabel('Time (s)'); ylabel('\theta'); title('Covariance Inflation Factor over Time');
 legend; grid on;
+
+saveas(gcf, 'Task4_params.png')
+saveas(gcf, 'Task4_params', 'epsc')

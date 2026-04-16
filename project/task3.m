@@ -196,3 +196,6 @@ ylabel('v_D (m/s)'); title('Down Velocity (Barometer-derived)');
 grid on; legend('Location', 'best');
 
 sgtitle('Task 3: EKF vs UKF — GPS-Free Navigation with Optical Flow');
+
+saveas(gcf, 'Task3.png')
+saveas(gcf, 'Task3', 'epsc')

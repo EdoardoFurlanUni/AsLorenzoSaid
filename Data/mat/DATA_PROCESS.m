@@ -11,7 +11,8 @@ folder_num = input('Please enter the data number to be read:','s');
 % 50_2025-10-18-11-09-00
 
 % Constructing a folder path
-base_path = fileparts(mfilename('fullpath'));
+% base_path = fileparts(mfilename('fullpath'));
+base_path = pwd;
 folder_name = sprintf('log_%s', folder_num);
 full_folder_path = fullfile(base_path, folder_name);
 
@@ -27,11 +28,11 @@ imu = readtable(file_IMU);
 % 11-12: dt for angle and velocity [us]
 
 % Convert increments to true rates (rad/s and m/s^2) using exact delta_t
-dt_ang = table2array(imu(:,11)) * 1e-6;
+dt_ang = table2array(imu(:,11)) * 1e-6; % microseconds -> seconds
 dt_vel = table2array(imu(:,12)) * 1e-6;
 
-rate_ang = table2array(imu(:,5:7)) ./ dt_ang;
-rate_vel = table2array(imu(:,8:10)) ./ dt_vel;
+rate_ang = table2array(imu(:,5:7)) ./ dt_ang; % rad -> rad/s
+rate_vel = table2array(imu(:,8:10)) ./ dt_vel; % m/s -> m/s²
 
 % Save as rates in imu_tbl
 imu_tbl = [table2array(imu(:,2)), rate_ang, rate_vel];
@@ -174,5 +175,26 @@ plot(dv(:,2), 'c-');
 ylabel('y');
 subplot(1,3,3)
 plot(dv(:,3), 'c-'); 
-ylabel('y');
+ylabel('z'); % z not y (?)
 legend('\Delta_{v}');
+
+%% IMU Scale Bug Verification
+fprintf('\n--- IMU Scale Bug Check ---\n');
+
+mean_acc_norm  = mean(sqrt(dv(:,1).^2     + dv(:,2).^2     + dv(:,3).^2))     * Delta;
+mean_gyro_norm = mean(sqrt(dtheta(:,1).^2 + dtheta(:,2).^2 + dtheta(:,3).^2)) * Delta;
+
+fprintf('Mean |acc|  = %.4f m/s^2  (expected ~9.81)\n', mean_acc_norm);
+fprintf('Mean |gyro| = %.4f rad/s  (expected < 2.0)\n', mean_gyro_norm);
+
+if abs(mean_acc_norm - 9.81) < 2.0
+    fprintf('[OK] Accelerometer scale looks correct.\n');
+else
+    fprintf('[WARNING] Accelerometer scale looks wrong! Bug may still be present.\n');
+end
+
+if mean_gyro_norm < 2.0
+    fprintf('[OK] Gyroscope scale looks correct.\n');
+else
+    fprintf('[WARNING] Gyroscope scale looks wrong! Bug may still be present.\n');
+end

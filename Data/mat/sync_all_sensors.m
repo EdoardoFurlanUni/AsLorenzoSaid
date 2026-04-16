@@ -51,8 +51,8 @@ acc   = movmean(acc, 15, 1);
 
 % Convert rates to 100Hz filter increments correctly scaled
 Delta_freq = round(1/dt_min); % 100 Hz
-dtheta = omega / Delta_freq;
-dv = acc / Delta_freq;
+dtheta = omega / Delta_freq; % rad/s -> rad per 100Hz step
+dv = acc / Delta_freq; % m/s² -> m/s per 100Hz step
 
 %% 4. 对齐 GPS 数据
 % 假设 gps_tbl(:,5:7) 是位置 NED, (:,2:4) 是速度 NED
