@@ -32,20 +32,12 @@ P0 = diag([1e-4*ones(4,1); 0.1*ones(3,1); 0.1*ones(3,1); 1e-6*ones(3,1); 1e-4*on
 % Noise Covariances (Tuning for smoother tracking)
 % - Aggressively decreased velocity process noise (from 0.05 to 0.01) to strongly trust the smoothed IMU.
 B_mat = diag([1e-3*ones(4,1); 0.01*ones(3,1); 0.01*ones(3,1); 1e-7*ones(3,1); 1e-5*ones(3,1)]);
-D_mat = diag([0.15; 0.15; 5.0; 0.5]); % [flow vbx | flow vby | baro vd | dist pd]
+D_mat = diag([0.15; 0.15; 1.0]); % [flow vbx | flow vby | baro h]
 
-% Compute vertical velocity vd from barometer.
-% baro_h is Nx2: col 1 = altitude [m], col 2 = velocity already computed by sync_all_sensors.
-% In NED convention vd is positive downward; altitude is positive upward -> negate.
-% Smooth altitude first to reduce finite-difference noise - non mi convince molto.
-baro_h_smooth = movmean(baro_h(:,1), 20);          % smooth altitude column (Nx1)
-baro_vd       = -[0; diff(baro_h_smooth)] * Delta; % Nx1, m/s (NED down convention)
-
-% Measurement Vector y: [v_body_x; v_body_y; v_ned_z; p_d]
+% Measurement Vector y: [v_body_x; v_body_y; p_d]
 %   flow_v(:,1:2)  <- estimator_optical_flow (body frame)
-%   baro_vd        <- barometer altitude derivative (down velocity)
-%   dist_h         <- distance sensor (altitude)
-y_meas = [flow_v(start_idx:start_idx+T-1, 1:2), baro_vd(start_idx:start_idx+T-1), dist_h(start_idx:start_idx+T-1)]';
+%   baro_h(:,1)    <- barometer altitude
+y_meas = [flow_v(start_idx:start_idx+T-1, 1:2), baro_h(start_idx:start_idx+T-1, 1)]';
 
 % 4. Optimization: Convert Symbolic to Numeric Functions
 fprintf('Optimizing symbolic functions...\n');
@@ -62,19 +54,32 @@ h_jac_num = matlabFunction(h_jac_sym, 'Vars', {sym_x});
 fprintf('Running EKF...\n');
 Xekf = zeros(16, T+1); Xekf(:,1) = x0;
 Vekf = zeros(16, 16, T+1); Vekf(:,:,1) = P0;
-Q = B_mat*B_mat'; R = D_mat*D_mat'; % process noise covariance and measurement noise covariance
+Q_base = B_mat*B_mat'; R_base = D_mat*D_mat'; % Base process and measurement noise covariances
 
 tic;
 for i = 1:T
     i
     u_i = [dtheta(start_idx+i-1,:)'; dv(start_idx+i-1,:)'];
+    
+    % --- Matrici Covarianza Tempo Varianti (EKF) ---
+    % 1. Process Noise Q: Aumenta sulle velocità se le accelerazioni IMU sono alte (manovre brusche/vibrazioni)
+    accel_mag = norm(u_i(4:6)) / dt_val; % approssimazione accelerazione m/s^2
+    Q_k = Q_base;
+    Q_k(5:7, 5:7) = Q_base(5:7, 5:7) * (1 + 0.1 * accel_mag);
+    
+    % 2. Measurement Noise R: Il rumore della velocità misurata aumenta con la quota (v = flow * h)
+    % Usiamo la quota stimata corrente (h > 0.1 per evitare singolarità a terra)
+    current_h = max(0.1, abs(Xekf(10, i))); 
+    R_k = R_base;
+    R_k(1:2, 1:2) = R_base(1:2, 1:2) * (current_h^2);
+
     % EKF Predict
     X_pred = f_num(Xekf(:,i), u_i, dt_val); %prediction using state equation
-    A = f_jac_num(Xekf(:,i), u_i, dt_val); %Jacobian
-    V_pred = A * Vekf(:,:,i) * A' + Q; %covariance prediction
+    A = f_jac_num(Xekf(:,i), u_i, dt_val);  %Jacobian
+    V_pred = A * Vekf(:,:,i) * A' + Q_k;    %covariance prediction con Q_k
     % EKF Update
     C = h_jac_num(X_pred); %Jacobian
-    K = V_pred * C' / (C * V_pred * C' + R); %Kalman gain
+    K = V_pred * C' / (C * V_pred * C' + R_k); %Kalman gain con R_k
     h_val = h_num(X_pred); %measurement prediction
     Xekf(:,i+1) = X_pred + K * (y_meas(:,i) - h_val); %state update
     % Normalize quaternion to prevent norm drift corrupting R(q)
@@ -87,7 +92,7 @@ fprintf('EKF finished in %.4f seconds.\n', t_ekf);
 fprintf('Running UKF (Numerical)...\n');
 Xukf = zeros(16, T+1); Xukf(:,1) = x0;
 Vukf = zeros(16, 16, T+1); Vukf(:,:,1) = P0;
-n = 16; m = 4; % state dim = 16, measurement dim = 4
+n = 16; m = 3; % state dim = 16, measurement dim = 3
 alpha = 0.1; kapa = 3-n; beta = 2;
 lambda = alpha^2 * (n + kapa) - n;
 Wm = [lambda/(n+lambda), ones(1, 2*n)/(2*(n+lambda))];
@@ -96,6 +101,15 @@ Wc = Wm; Wc(1) = Wc(1) + (1 - alpha^2 + beta);
 tic;
 for i = 1:T
     u_i = [dtheta(start_idx+i-1,:)'; dv(start_idx+i-1,:)'];
+    
+    % --- Matrici Covarianza Tempo Varianti (UKF) ---
+    accel_mag = norm(u_i(4:6)) / dt_val; 
+    Q_k = Q_base;
+    Q_k(5:7, 5:7) = Q_base(5:7, 5:7) * (1 + 0.1 * accel_mag);
+    
+    current_h = max(0.1, abs(Xukf(10, i))); 
+    R_k = R_base;
+    R_k(1:2, 1:2) = R_base(1:2, 1:2) * (current_h^2);
     
     % 1. Sigma Points (Prediction)
     P_sqrt = chol((n + lambda) * Vukf(:,:,i))';
@@ -109,7 +123,7 @@ for i = 1:T
     
     % 3. Predicted Mean and Covariance
     x_pred = sum(Wm .* sigma_x_pred, 2);
-    P_pred = Q;
+    P_pred = Q_k;
     for j = 1:2*n+1
         diff_x_pred = sigma_x_pred(:,j) - x_pred;
         P_pred = P_pred + Wc(j) * (diff_x_pred * diffMulti(diff_x_pred)); % Custom mult for safety
@@ -128,7 +142,7 @@ for i = 1:T
     
     % 6. Predicted Measurement and Cross-Covariance
     y_pred = sum(Wm .* sigma_y_pred, 2);
-    Py = R; Pxy = zeros(n, m);
+    Py = R_k; Pxy = zeros(n, m);
     for j = 1:2*n+1
         diff_x = sigma_x_upd(:,j) - x_pred;
         diff_y = sigma_y_pred(:,j) - y_pred;
@@ -182,17 +196,6 @@ plot(time_axis, dist_h(start_idx:start_idx+T-1), 'k.', 'MarkerSize', 3, 'Display
 plot(time_axis, Xekf(10, 2:T+1), 'r', 'LineWidth', 1.5, 'DisplayName', 'EKF estimate');
 plot(time_axis, Xukf(10, 2:T+1), 'b--', 'LineWidth', 1.5, 'DisplayName', 'UKF estimate');
 yaxis_label = 'p_d (m)'; ylabel(yaxis_label); title('Altitude (Position Down)');
-grid on; legend('Location', 'best');
-
-% --- Down Velocity: barometer-derived measurement vs filter estimate vs GPS reference ---
-% baro_vd is the GPS-free measurement of vd used by the filter.
-% GPS is shown only as external reference to evaluate estimation quality.
-subplot(2, 2, 4);
-plot(time_axis, baro_vd(start_idx:start_idx+T-1), 'k.', 'MarkerSize', 2, 'DisplayName', 'Baro vd (noisy)'); hold on;
-plot(time_axis, gps_gt(start_idx:start_idx+T-1, 3), 'k--', 'LineWidth', 1, 'DisplayName', 'GPS ref (not used)');
-plot(time_axis, Xekf(7, 2:T+1), 'r', 'LineWidth', 1.5, 'DisplayName', 'EKF estimate');
-plot(time_axis, Xukf(7, 2:T+1), 'b--', 'LineWidth', 1.5, 'DisplayName', 'UKF estimate');
-ylabel('v_D (m/s)'); title('Down Velocity (Barometer-derived)');
 grid on; legend('Location', 'best');
 
 sgtitle('Task 3: EKF vs UKF — GPS-Free Navigation with Optical Flow');

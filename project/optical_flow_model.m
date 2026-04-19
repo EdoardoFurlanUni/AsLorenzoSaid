@@ -13,11 +13,10 @@ function y = optical_flow_model(x)
     %        ab_x, ab_y, ab_z]    % accel biases (m/s^2)
     %
     % Output:
-    %   y : 4x1 measurement vector
+    %   y : 3x1 measurement vector
     %       [v_body_x;   % body-frame velocity X (m/s)  <- optical flow
     %        v_body_y;   % body-frame velocity Y (m/s)  <- optical flow
-    %        v_ned_z;    % NED down velocity    (m/s)   <- not from optical flow
-    %        p_d]        % position down / altitude (m) <- distance sensor
+    %        p_d]        % position down / altitude (m) <- barometer
 
     q   = x(1:4);
     v_n = x(5:7);
@@ -29,6 +28,5 @@ function y = optical_flow_model(x)
 
     y = [v_b(1);
          v_b(2);
-         v_n(3);
          p_d];
 end

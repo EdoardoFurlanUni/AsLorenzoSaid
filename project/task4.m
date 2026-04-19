@@ -47,14 +47,10 @@ P0 = diag([1e-4*ones(4,1); 0.1*ones(3,1); 0.1*ones(3,1); 1e-6*ones(3,1); 1e-4*on
 % Noise Covariances (Tuning for smoother tracking)
 % - Aggressively decreased velocity process noise (from 0.05 to 0.01)
 B_mat = diag([1e-3*ones(4,1); 0.01*ones(3,1); 0.01*ones(3,1); 1e-7*ones(3,1); 1e-5*ones(3,1)]);
-D_mat = diag([0.15; 0.15; 5.0; 0.5]); % [flow vbx | flow vby | baro vd | dist pd]
+D_mat = diag([0.15; 0.15; 1.0]); % [flow vbx | flow vby | baro h]
 
-% Compute vertical velocity vd from barometer
-baro_h_smooth = movmean(baro_h(:,1), 20);          
-baro_vd       = -[0; diff(baro_h_smooth)] * Delta; 
-
-% Measurement Vector y: [v_body_x; v_body_y; v_ned_z; p_d]
-y_meas = [flow_v(start_idx:start_idx+T-1, 1:2), baro_vd(start_idx:start_idx+T-1), dist_h(start_idx:start_idx+T-1)]';
+% Measurement Vector y: [v_body_x; v_body_y; p_d]
+y_meas = [flow_v(start_idx:start_idx+T-1, 1:2), baro_h(start_idx:start_idx+T-1, 1)]';
 
 % Input Matrix U for filters
 U = [dtheta(start_idx:start_idx+T-1, :)'; dv(start_idx:start_idx+T-1, :)'];
@@ -105,13 +101,6 @@ plot(time_axis, Xrekf(6, :), 'b--', 'LineWidth', 1.2, 'DisplayName', 'REKF');
 plot(time_axis, Xrukf(6, :), 'r-.', 'LineWidth', 1.2, 'DisplayName', 'RUKF');
 plot(time_axis, flow_v(start_idx:start_idx+T, 3), 'g:', 'LineWidth', 1.5, 'DisplayName', 'PX4 EKF (Optical Flow Only)');
 xlabel('Time (s)'); ylabel('v_E (m/s)'); title('East Velocity v_E');
-legend('Location', 'best'); grid on;
-
-subplot(3, 1, 3);
-plot(time_axis, baro_vd(start_idx:start_idx+T), 'k-', 'LineWidth', 1, 'DisplayName', 'Barometer v_D (Derived)'); hold on;
-plot(time_axis, Xrekf(7, :), 'b--', 'LineWidth', 1.5, 'DisplayName', 'REKF');
-plot(time_axis, Xrukf(7, :), 'r-.', 'LineWidth', 1.5, 'DisplayName', 'RUKF');
-xlabel('Time (s)'); ylabel('v_D (m/s)'); title('Down Velocity v_D');
 legend('Location', 'best'); grid on;
 
 saveas(gcf, 'Task4_vel.png')

@@ -82,40 +82,46 @@ att = readtable(file_att);
 att_tbl = table2array(att(:,[1,3:6]));
 
 %%%%%%%%%%%%%%%%%%%%%%%%% Optical flow and Distance %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Optical flow data
-% Concatenate the full file path
+%% Level 3: Estimator optical flow
 file_flow = fullfile(full_folder_path, sprintf('log_%s_estimator_optical_flow_vel_0.csv', folder_num));
+optic = readtable(file_flow);
+% vel-x/y [m/s] in body (cols 3-4) and vel-N/E [m/s] (cols 5-6)
+flow_tbl = table2array(optic(:, [2, 3, 4, 5, 6]));
 
-% data
-optic=readtable(file_flow);
+%% Level 2: Vehicle optical flow
+file_veh_flow = fullfile(full_folder_path, sprintf('log_%s_vehicle_optical_flow_0.csv', folder_num));
+veh_flow = readtable(file_veh_flow);
+% Cols: timestamp(1), pixel_flow[0](4), pixel_flow[1](5), distance_m(9), integration_timespan_us(10)
+veh_flow_tbl = table2array(veh_flow(:, [1, 4, 5, 9, 10]));
 
-% vel-x/y [m/s] in body and vel-x/y [m/s] in ne
-flow_tbl = table2array(optic(:,[2,3,4,5,6])); 
+%% Level 1: Raw sensor optical flow (no gyro compensation)
+file_raw_flow = fullfile(full_folder_path, sprintf('log_%s_sensor_optical_flow_0.csv', folder_num));
+raw_flow = readtable(file_raw_flow);
+% Here we use distance_sensor_0 (dist_tbl) for height, passed into sync_all_sensors.
+% Extract: [timestamp(1), pixel_flow[0](4), pixel_flow[1](5), integration_timespan_us(10)]
+raw_flow_tbl = table2array(raw_flow(:, [1, 4, 5, 10]));  % 4 cols (no distance)
 
 %% Distance data
-% Concatenate the full file path
 file_dist = fullfile(full_folder_path, sprintf('log_%s_distance_sensor_0.csv', folder_num));
-
-% data
-dist=readtable(file_dist);
-
+dist = readtable(file_dist);
 % Height [m] from the ground
-dist_tbl = table2array(dist(:,[1,5])); 
+dist_tbl = table2array(dist(:, [1, 5]));
 
 %% Alignment
-[t_sync, Delta, dtheta, dv, gps_gt, gps_mea, baro_h, flow_v, dist_h, q_sync] = ...
-    sync_all_sensors(imu_tbl, gps_tbl, baro_tbl, flow_tbl, dist_tbl, att_tbl);
+[t_sync, Delta, dtheta, dv, gps_gt, gps_mea, baro_h, flow_v, dist_h, q_sync, raw_flow_v, veh_flow_v] = ...
+    sync_all_sensors(imu_tbl, gps_tbl, baro_tbl, flow_tbl, dist_tbl, att_tbl, raw_flow_tbl, veh_flow_tbl);
 
-% t_sync : unified time vector
-% Delta  : Data frequence
-% dtheta : angular increments (rad)
-% dv     : velocity increments (m/s) 
-% gps    : velocity (m/s) and positions (m)
-% where gt = grouth truth w.r.t linear interp and mea = measurements w.r.t
-% zero hold interp
-% baro_h : height from barometer (m)
-% flow_v : velocity from optical flow (m/s) in body and ne
-% dist_h : distance to ground (m)
+% t_sync     : unified time vector
+% Delta      : data frequency (Hz)
+% dtheta     : angular increments (rad)
+% dv         : velocity increments (m/s)
+% gps_gt     : GPS ground truth velocities & positions (linear interp)
+% gps_mea    : GPS measurements (zero-order hold)
+% baro_h     : height from barometer (m)
+% flow_v     : Level 3 - estimator_optical_flow body/NE velocities (m/s)
+% dist_h     : distance to ground (m)
+% raw_flow_v : Level 1 - body velocities from raw sensor_optical_flow (m/s)
+% veh_flow_v : Level 2 - body velocities from vehicle_optical_flow, gyro-comp (m/s)
 
 
 %% GPS-denied setting 

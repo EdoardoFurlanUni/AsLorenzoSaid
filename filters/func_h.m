@@ -21,10 +21,9 @@ function [z] = func_h(sym_x)
     
     v_b = R_n2b * v_n;
     
-    % Measurements: [v_body_x; v_body_y; v_ned_z; pos_ned_z]
+    % Measurements: [v_body_x; v_body_y; pos_ned_z]
     z = [v_b(1);
          v_b(2);
-         v_n(3); 
          p_d];
 end
 

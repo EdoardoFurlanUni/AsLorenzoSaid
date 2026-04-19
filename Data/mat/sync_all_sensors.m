@@ -1,43 +1,49 @@
-function [t_sync, Delta, dtheta, dv, gps_gt, gps_mea, baro_h, flow_v, dist_h, q_sync] = ...
-    sync_all_sensors(imu_tbl, gps_tbl, baro_tbl, flow_tbl, dist_tbl, att_tbl)
+function [t_sync, Delta, dtheta, dv, gps_gt, gps_mea, baro_h, flow_v, dist_h, q_sync, raw_flow_v, veh_flow_v] = ...
+    sync_all_sensors(imu_tbl, gps_tbl, baro_tbl, flow_tbl, dist_tbl, att_tbl, raw_flow_tbl, veh_flow_tbl)
 %SYNC_ALL_SENSORS Align multiple PX4 sensor data to the highest frequency sensor
 %
 % INPUTS:
-%   imu_tbl   - IMU table, first column timestamp, 2-7: angular & velocity increments
-%   gps_tbl   - GPS table, first column timestamp, next columns position and velocity
-%   baro_tbl  - Barometer table, first column timestamp, height/pressure/temp
-%   flow_tbl  - Optical flow table, first column timestamp, velocity data
-%   dist_tbl  - Distance sensor table, first column timestamp, height
-%   att_tbl   - Attitude table, first column timestamp, 2-5: quaternions
+%   imu_tbl      - IMU table, first column timestamp, 2-7: angular & velocity rates
+%   gps_tbl      - GPS table, first column timestamp, next columns velocity and position NED
+%   baro_tbl     - Barometer table, first column timestamp, pressure/temp
+%   flow_tbl     - Level 3: estimator_optical_flow_vel table (EKF output)
+%   dist_tbl     - Distance sensor table, first column timestamp, height
+%   att_tbl      - Attitude table, first column timestamp, 2-5: quaternions
+%   raw_flow_tbl - Level 1: sensor_optical_flow [timestamp, pf_x, pf_y, dist_m, timespan_us]
+%   veh_flow_tbl - Level 2: vehicle_optical_flow [timestamp, pf_x, pf_y, dist_m, timespan_us]
 %
 % OUTPUTS:
-%   t_sync    - unified time vector
-%   Delta     - average time step
-%   dtheta    - angular increments [rad] (aligned)
-%   dv        - velocity increments [m/s] (aligned)
-%   gps_gt    - GPS ground truth velocities & positions [m/s & m] (linear interp)
-%   gps_mea   - GPS measurements [m/s & m] (zero-order hold)
-%   baro_h    - barometer height (m)
-%   flow_v    - optical flow velocity in body 2-3, and ned 4-5 (m/s)
-%   dist_h    - distance sensor height (m)
-%   q_sync    - synchronized quaternions
+%   t_sync     - unified time vector
+%   Delta      - average time step (Hz)
+%   dtheta     - angular increments [rad] (aligned)
+%   dv         - velocity increments [m/s] (aligned)
+%   gps_gt     - GPS ground truth velocities & positions [m/s & m] (linear interp)
+%   gps_mea    - GPS measurements [m/s & m] (zero-order hold)
+%   baro_h     - barometer height (m)
+%   flow_v     - Level 3: optical flow body/NE velocity (m/s)
+%   dist_h     - distance sensor height (m)
+%   q_sync     - synchronized quaternions
+%   raw_flow_v - Level 1: body velocity from raw pixel flow (m/s), [vx, vy]
+%   veh_flow_v - Level 2: body velocity from gyro-compensated pixel flow (m/s), [vx, vy]
 
-%% 1. 提取时间
-t_imu  = imu_tbl(:,1)* 1e-6;
-t_gps  = gps_tbl(:,1)* 1e-6;
-t_baro = baro_tbl(:,1)* 1e-6;
-t_flow = flow_tbl(:,1)* 1e-6;
-t_dist = dist_tbl(:,1)* 1e-6;
-t_att  = att_tbl(:,1)* 1e-6;
+%% 1. Extract timestamps
+t_imu      = imu_tbl(:,1)     * 1e-6;
+t_gps      = gps_tbl(:,1)     * 1e-6;
+t_baro     = baro_tbl(:,1)    * 1e-6;
+t_flow     = flow_tbl(:,1)    * 1e-6;
+t_dist     = dist_tbl(:,1)    * 1e-6;
+t_att      = att_tbl(:,1)     * 1e-6;
+t_raw_flow = raw_flow_tbl(:,1)* 1e-6;
+t_veh_flow = veh_flow_tbl(:,1)* 1e-6;
 
 %% Step 2: Determine highest frequency sensor
 dt_list = [median(diff(t_imu)), median(diff(t_gps)), ...
            median(diff(t_baro)), median(diff(t_flow)), median(diff(t_dist)), median(diff(t_att))];
 [dt_min, ~] = min(dt_list);
 
-% Generate unified time axis within common overlapping interval
-t_start = max([t_imu(1), t_gps(1), t_baro(1), t_flow(1), t_dist(1), t_att(1)]);
-t_end   = min([t_imu(end), t_gps(end), t_baro(end), t_flow(end), t_dist(end), t_att(end)]);
+% Generate unified time axis within common overlapping interval of ALL sensors
+t_start = max([t_imu(1), t_gps(1), t_baro(1), t_flow(1), t_dist(1), t_att(1), t_raw_flow(1), t_veh_flow(1)]);
+t_end   = min([t_imu(end), t_gps(end), t_baro(end), t_flow(end), t_dist(end), t_att(end), t_raw_flow(end), t_veh_flow(end)]);
 t_sync  = (t_start : dt_min : t_end)';
 
 %% 3. Align IMU Data and compute correct Filter Increments
@@ -95,14 +101,30 @@ baro_h = [baro_alt, baro_vel]; % Size Number_samples x Number_meas
 offset = baro_h(1,1);
 baro_h(:,1) = baro_h(:,1) - offset;
 
-%% 6. 对齐 Optical Flow
+%% 6. Align Level-3 Optical Flow (estimator_optical_flow_vel: EKF output)
 flow_v = interp1(t_flow, flow_tbl(:,2:5), t_sync, 'linear', 'extrap'); % x/y velocity in body and ned
 
-%% 7. 对齐 Distance sensor
-dist_h = interp1(t_dist, dist_tbl(:,2), t_sync, 'linear', 'extrap');   % 高度
+%%Align Level-1 Raw Optical Flow (sensor_optical_flow)
+% raw_flow_tbl has 4 cols: [timestamp, pixel_flow[0], pixel_flow[1], integration_timespan_us]
+% Interpolate distance_sensor_0 to the raw flow timestamps.
+timespan_s_raw  = raw_flow_tbl(:,4) * 1e-6;             % us -> seconds (col 4 is timespan_us)
+dist_at_raw     = interp1(t_dist, dist_tbl(:,2), t_raw_flow, 'linear', 'extrap'); % m
+v_raw_x = raw_flow_tbl(:,2) ./ timespan_s_raw .* dist_at_raw;   % body vx from raw chip
+v_raw_y = raw_flow_tbl(:,3) ./ timespan_s_raw .* dist_at_raw;   % body vy from raw chip
+raw_flow_v = interp1(t_raw_flow, [v_raw_x, v_raw_y], t_sync, 'linear', 'extrap');
 
-%% 8. 对齐 Attitude (Quaternions)
+%%Align Level-2 Vehicle Optical Flow (vehicle_optical_flow: gyro-compensated)
+
+timespan_s_veh = veh_flow_tbl(:,5) * 1e-6;          % us -> seconds
+v_veh_x = veh_flow_tbl(:,2) ./ timespan_s_veh .* veh_flow_tbl(:,4);
+v_veh_y = veh_flow_tbl(:,3) ./ timespan_s_veh .* veh_flow_tbl(:,4);
+veh_flow_v = interp1(t_veh_flow, [v_veh_x, v_veh_y], t_sync, 'linear', 'extrap');
+
+%% 7. Align Distance sensor
+dist_h = interp1(t_dist, dist_tbl(:,2), t_sync, 'linear', 'extrap');   % height (m)
+
+%% 8. Align Attitude (Quaternions)
 q_sync = interp1(t_att, att_tbl(:,2:5), t_sync, 'linear', 'extrap');
 
-Delta = round(1/dt_min); % frequence
+Delta = round(1/dt_min); % frequency (Hz)
 end
