@@ -191,8 +191,8 @@ yaxis_label = 'v_E (m/s)'; ylabel(yaxis_label); title('East Velocity');
 grid on; legend('Location', 'best');
 
 % --- Altitude: filter estimate vs distance sensor measurement ---
-subplot(2, 2, 3);
-plot(time_axis, dist_h(start_idx:start_idx+T-1), 'k.', 'MarkerSize', 3, 'DisplayName', 'Dist sensor (noisy)'); hold on;
+subplot(2, 2, 3); % TODO: baro_h o dist_h ???, sec me baro_h
+plot(time_axis, movmean(baro_h(start_idx:start_idx+T-1),10), 'k.', 'MarkerSize', 3, 'DisplayName', 'Dist sensor (noisy)'); hold on;
 plot(time_axis, Xekf(10, 2:T+1), 'r', 'LineWidth', 1.5, 'DisplayName', 'EKF estimate');
 plot(time_axis, Xukf(10, 2:T+1), 'b--', 'LineWidth', 1.5, 'DisplayName', 'UKF estimate');
 yaxis_label = 'p_d (m)'; ylabel(yaxis_label); title('Altitude (Position Down)');

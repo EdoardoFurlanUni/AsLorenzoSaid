@@ -38,7 +38,8 @@ t_veh_flow = veh_flow_tbl(:,1)* 1e-6;
 
 %% Step 2: Determine highest frequency sensor
 dt_list = [median(diff(t_imu)), median(diff(t_gps)), ...
-           median(diff(t_baro)), median(diff(t_flow)), median(diff(t_dist)), median(diff(t_att))];
+           median(diff(t_baro)), median(diff(t_flow)), median(diff(t_dist)), ...
+           median(diff(t_att)), median(diff(t_raw_flow)), median(diff(t_veh_flow))];
 [dt_min, ~] = min(dt_list);
 
 % Generate unified time axis within common overlapping interval of ALL sensors

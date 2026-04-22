@@ -20,7 +20,8 @@
 clear; clc; close all;
 
 %% 1. Load synchronized data
-project_dir = fileparts(mfilename('fullpath'));
+% project_dir = fileparts(mfilename('fullpath'));
+project_dir = pwd;
 addpath(project_dir);
 data_path = fullfile(project_dir, '..', 'Data', 'mat', 'data_sync.mat');
 
@@ -44,7 +45,7 @@ for k = 1 : N
     %   [q0,q1,q2,q3 | vn,ve,vd | pn,pe,pd | wb | ab]
     x = [q; v_ned; zeros(9,1)];
 
-    y_full      = optical_flow_model(x);   % returns [v_body_x; v_body_y; vd; pd]
+    y_full      = optical_flow_model(x);   % returns [v_body_x; v_body_y; pd]
     y_pred(k,:) = y_full(1:2)';
 end
 
