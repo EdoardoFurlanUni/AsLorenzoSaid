@@ -1,162 +1,138 @@
-%% Task 2: Accuracy Verification of the Optical Flow Model
+%% Task 2: Accuracy Verification of the Optical Flow Measurement Model
 % =========================================================================
-%   GPS NED velocity (ground truth) is fed through the observer model h(x)
-%   (which rotates v_NED → body frame via the quaternion attitude) to
-%   produce the PREDICTED body-frame velocities.
+%   GPS NED velocity (ground truth) is fed through the measurement model h(x)
+%   (which rotates v from n-frame to b-frame via quaternion attitude) to
+%   produce the predicted body-frame velocities, compared against three
+%   optical flow measurement levels.
 %
 %   Level 1 | Raw (sensor_optical_flow)
 %              vel = (pixel_flow / timespan_s) * distance_m
-%              No gyro compensation → noisiest.
+%              Raw data from the sensor chip at variable sampling rate.
+%              Not gyro-compensated.
 %
-%   Level 2 | Gyro-compensated (vehicle_optical_flow)
-%              Same formula; PX4 driver already removed the rotational
-%              contribution of the IMU gyro from pixel_flow.
+%   Level 2 | Processed (vehicle_optical_flow)
+%              Same velocity formula as Level 1, but data is resampled
+%              by PX4 to a fixed sampling time. Not gyro-compensated.
 %
-%   Level 3 | EKF output (estimator_optical_flow_vel)
-%              PX4 internal EKF fused + smoothed body velocity. Cleanest.
-%
+%   Level 3 | PX4 EKF output (estimator_optical_flow_vel)
+%              Gyro-compensated body/NE velocity from PX4 internal EKF
+%      
+%   This version replaces RMSE with Robust Standard Deviation (via MAD) 
+%   to accurately estimate nominal noise by rejecting outliers.
 % =========================================================================
 
 clear; clc; close all;
 
 %% 1. Load synchronized data
-% project_dir = fileparts(mfilename('fullpath'));
-project_dir = pwd;
-addpath(project_dir);
-data_path = fullfile(project_dir, '..', 'Data', 'mat', 'data_sync.mat');
+
+folder_num = input('Please enter the data number to be read:','s');
+% 46_2025-10-18-10-11-28
+% 47_2025-10-18-10-28-26
+% 48_2025-10-18-10-40-54
+% 49_2025-10-18-10-53-38
+% 50_2025-10-18-11-09-00
+
+project_dir = fileparts(mfilename('fullpath'));
+filters_dir = fullfile(project_dir, '..', 'filters');
+addpath(filters_dir);
+num_only   = strtok(folder_num, '_');
+data_path  = fullfile(project_dir, '..', 'Data', 'mat', sprintf('data_sync_%s.mat', num_only));
 
 if ~exist(data_path, 'file')
-    error('Please run Data/mat/DATA_PROCESS.m first to generate data_sync.mat');
+    error('Please run Data/mat/DATA_PROCESS.m first to generate data_sync_%s.mat', num_only);
 end
 fprintf('Loading data from %s...\n', data_path);
 load(data_path);
 % Variables loaded: t_sync, gps_gt, q_sync, flow_v, raw_flow_v, veh_flow_v, ...
 
-%% 2. Model prediction: h(GPS_velocity, attitude) → predicted body velocity
+%% 2. Model prediction: h(GPS_velocity, attitude) -> predicted body velocity
 N      = length(t_sync);
 y_pred = zeros(N, 2);
 
 fprintf('Running model prediction over %d samples...\n', N);
 for k = 1 : N
     q     = q_sync(k, :)';          % quaternion from vehicle_attitude log
-    v_ned = gps_gt(k, 1:3)';        % GPS NED velocity [vn; ve; vd] @ 100 Hz
+    v_ned = gps_gt(k, 1:3)';        % GPS NED velocity [vn; ve; vd] 
 
-    % State vector for optical_flow_model (h(x)):
+    % State vector for func_h (h(x)):
     %   [q0,q1,q2,q3 | vn,ve,vd | pn,pe,pd | wb | ab]
     x = [q; v_ned; zeros(9,1)];
 
-    y_full      = optical_flow_model(x);   % returns [v_body_x; v_body_y; pd]
+    y_full      = func_h(x);   % returns [v_body_x; v_body_y; pd]
     y_pred(k,:) = y_full(1:2)';
 end
 
-%% 3. Measurement vectors (all at 100 Hz from data_sync.mat)
-y_raw = raw_flow_v(:, 1:2);   % Lv1 – raw pixel flow velocity [vx, vy]
-y_veh = veh_flow_v(:, 1:2);   % Lv2 – gyro-compensated pixel flow velocity
-y_ekf = flow_v(:, 1:2);       % Lv3 – PX4 EKF body-velocity estimate
+%% 3. Measurement vectors 
+y_raw = raw_flow_v(:, 1:2);   % Lv1 - body velocity from sensor_optical_flow [vx, vy]
+y_veh = veh_flow_v(:, 1:2);   % Lv2 - body velocity from vehicle_optical_flow [vx, vy]
+y_ekf = flow_v(:, 1:2);       % Lv3 - body velocity from estimator_optical_flow_vel [vx, vy]
 
-fprintf('\n=== Signal amplitude check (max|v| over full recording) ===\n');
-fprintf('  GPS prediction (h(x)|GPS)   vx=%.4f  vy=%.4f m/s\n', ...
-    max(abs(y_pred(:,1))), max(abs(y_pred(:,2))));
-fprintf('  Level 1  raw pixel flow     vx=%.4f  vy=%.4f m/s\n', ...
-    max(abs(y_raw(:,1))), max(abs(y_raw(:,2))));
-fprintf('  Level 2  gyro-compensated   vx=%.4f  vy=%.4f m/s\n', ...
-    max(abs(y_veh(:,1))), max(abs(y_veh(:,2))));
-fprintf('  Level 3  PX4 EKF output     vx=%.4f  vy=%.4f m/s\n', ...
-    max(abs(y_ekf(:,1))), max(abs(y_ekf(:,2))));
+%% 4. Robust Standard Deviation (via MAD)
+% Scale factor to convert Median Absolute Deviation (MAD) to Gaussian standard deviation
+scale_factor = 1.4826;
 
-%% 4. RMSE (each level vs prediction)
-rmse_raw = sqrt(mean((y_raw - y_pred).^2));
-rmse_veh = sqrt(mean((y_veh - y_pred).^2));
-rmse_ekf = sqrt(mean((y_ekf - y_pred).^2));
+sigma_raw = median(abs(y_raw - y_pred)) * scale_factor;
+sigma_veh = median(abs(y_veh - y_pred)) * scale_factor;
+sigma_ekf = median(abs(y_ekf - y_pred)) * scale_factor;
 
-fprintf('\n=== RMSE: h(x)|GPS  vs  Optical Flow measurements ===\n');
-fprintf('  Level 1  raw pixel flow      : vx=%.4f m/s  vy=%.4f m/s\n', rmse_raw(1), rmse_raw(2));
-fprintf('  Level 2  gyro-compensated    : vx=%.4f m/s  vy=%.4f m/s\n', rmse_veh(1), rmse_veh(2));
-fprintf('  Level 3  PX4 EKF output      : vx=%.4f m/s  vy=%.4f m/s\n', rmse_ekf(1), rmse_ekf(2));
+fprintf('\n=== Robust Std Dev (sigma): h(x)|GPS vs Optical Flow measurements ===\n');
+fprintf('  Level 1 - sensor_optical_flow        : sigma_vx=%.4f m/s  sigma_vy=%.4f m/s\n', sigma_raw(1), sigma_raw(2));
+fprintf('  Level 2 - vehicle_optical_flow       : sigma_vx=%.4f m/s  sigma_vy=%.4f m/s\n', sigma_veh(1), sigma_veh(2));
+fprintf('  Level 3 - estimator_optical_flow_vel : sigma_vx=%.4f m/s  sigma_vy=%.4f m/s\n', sigma_ekf(1), sigma_ekf(2));
 
-%% 5. Helper: plot one level vs prediction
-% (defined at the bottom of this script as a nested function)
+%% Figure - All levels comparison (2 rows x 3 columns)
+fig = figure('Name', 'Task2 - All levels comparison', ...
+             'NumberTitle', 'off', 'Units', 'normalized', 'OuterPosition', [0 0.35 1 0.65]);
+
+lw_meas = 0.6;  
+lw_pred = 1.2;
 
 % Colour scheme
-c_pred = [0.05 0.05 0.05];   % near-black  – model prediction (GPS)
-c_meas = [0.15 0.50 0.85];   % steel-blue  – actual measurement
+c_lv1 = [0.15 0.50 0.85]; % actual measurement
+c_lv2 = [0.85 0.45 0.05]; %    "        "
+c_lv3 = [0.15 0.70 0.35]; %    "        "
+c_pred = [0.05 0.05 0.05]; % model prediction (GPS)
 
-% -------------------------------------------------------------------------
-%% Figure 1 – Level 1: Raw pixel flow (no gyro compensation)
-fig1 = figure('Name', 'Task2 – Level 1: Raw pixel flow', ...
-              'NumberTitle', 'off', 'Position', [60 500 1100 500]);
+col_names = {'Level 1 - sensor\_optical\_flow', ...
+             'Level 2 - vehicle\_optical\_flow', ...
+             'Level 3 - estimator\_optical\_flow\_vel'};
 
-subplot(2, 1, 1);
-plot_comparison(t_sync, y_pred(:,1), y_raw(:,1), c_pred, c_meas, ...
-    'v_{body,x}  (m/s)', ...
-    sprintf('Level 1 – RAW pixel flow  |  RMSE vx = %.4f m/s', rmse_raw(1)));
+plot_sigma_vx = [sigma_raw(1), sigma_veh(1), sigma_ekf(1)];
+plot_sigma_vy = [sigma_raw(2), sigma_veh(2), sigma_ekf(2)];
 
-subplot(2, 1, 2);
-plot_comparison(t_sync, y_pred(:,2), y_raw(:,2), c_pred, c_meas, ...
-    'v_{body,y}  (m/s)', ...
-    sprintf('Level 1 – RAW pixel flow  |  RMSE vy = %.4f m/s', rmse_raw(2)));
+meas_x = {y_raw(:,1), y_veh(:,1), y_ekf(:,1)};
+meas_y = {y_raw(:,2), y_veh(:,2), y_ekf(:,2)};
+colors = {c_lv1, c_lv2, c_lv3};
 
-sgtitle({'Task 2 – Optical Flow Verification', ...
-         'Level 1: sensor\_optical\_flow  (raw, no gyro compensation)'}, ...
-        'FontWeight', 'bold');
+ax = gobjects(2, 3);
+for col = 1:3
+    ax(1,col) = subplot(2, 3, col);
+    hold on; grid on;
+    plot(t_sync, meas_x{col}, '-', 'Color', [colors{col} 0.6], 'LineWidth', lw_meas, 'DisplayName', 'Measurement');
+    plot(t_sync, y_pred(:,1), '-', 'Color', c_pred, 'LineWidth', lw_pred, 'DisplayName', 'Prediction (h(x)|GPS)');
+    xlabel('Time (s)'); ylabel('v_{body,x}  (m/s)');
+    title(col_names{col}, 'FontSize', 13);
+    subtitle(sprintf('Robust \\sigma_{vx} = %.4f m/s', plot_sigma_vx(col)), 'FontSize', 10);
+    legend('Location', 'northeast', 'FontSize', 6);
+    xlim([t_sync(1), t_sync(end)]);
 
-% -------------------------------------------------------------------------
-%% Figure 2 – Level 2: Gyro-compensated (vehicle_optical_flow)
-fig2 = figure('Name', 'Task2 – Level 2: Gyro-compensated', ...
-              'NumberTitle', 'off', 'Position', [80 300 1100 500]);
+    ax(2,col) = subplot(2, 3, col+3);
+    hold on; grid on;
+    plot(t_sync, meas_y{col}, '-', 'Color', [colors{col} 0.6], 'LineWidth', lw_meas, 'DisplayName', 'Measurement');
+    plot(t_sync, y_pred(:,2), '-', 'Color', c_pred, 'LineWidth', lw_pred, 'DisplayName', 'Prediction (h(x)|GPS)');
+    xlabel('Time (s)'); ylabel('v_{body,y}  (m/s)');
+    subtitle(sprintf('Robust \\sigma_{vy} = %.4f m/s', plot_sigma_vy(col)), 'FontSize', 10);
+    legend('Location', 'northeast', 'FontSize', 6);
+    xlim([t_sync(1), t_sync(end)]);
+end
 
-subplot(2, 1, 1);
-plot_comparison(t_sync, y_pred(:,1), y_veh(:,1), c_pred, [0.85 0.45 0.05], ...
-    'v_{body,x}  (m/s)', ...
-    sprintf('Level 2 – Gyro-compensated  |  RMSE vx = %.4f m/s', rmse_veh(1)));
+linkaxes(ax(1,:), 'y');   % same y-scale across all vx subplots
+linkaxes(ax(2,:), 'y');   % same y-scale across all vy subplots
 
-subplot(2, 1, 2);
-plot_comparison(t_sync, y_pred(:,2), y_veh(:,2), c_pred, [0.85 0.45 0.05], ...
-    'v_{body,y}  (m/s)', ...
-    sprintf('Level 2 – Gyro-compensated  |  RMSE vy = %.4f m/s', rmse_veh(2)));
-
-sgtitle({'Task 2 – Optical Flow Verification', ...
-         'Level 2: vehicle\_optical\_flow  (gyro rotation removed by PX4 driver)'}, ...
-        'FontWeight', 'bold');
-
-% -------------------------------------------------------------------------
-%% Figure 3 – Level 3: PX4 EKF output (estimator_optical_flow_vel)
-fig3 = figure('Name', 'Task2 – Level 3: PX4 EKF output', ...
-              'NumberTitle', 'off', 'Position', [100 100 1100 500]);
-
-subplot(2, 1, 1);
-plot_comparison(t_sync, y_pred(:,1), y_ekf(:,1), c_pred, [0.15 0.70 0.35], ...
-    'v_{body,x}  (m/s)', ...
-    sprintf('Level 3 – PX4 EKF output  |  RMSE vx = %.4f m/s', rmse_ekf(1)));
-
-subplot(2, 1, 2);
-plot_comparison(t_sync, y_pred(:,2), y_ekf(:,2), c_pred, [0.15 0.70 0.35], ...
-    'v_{body,y}  (m/s)', ...
-    sprintf('Level 3 – PX4 EKF output  |  RMSE vy = %.4f m/s', rmse_ekf(2)));
-
-sgtitle({'Task 2 – Optical Flow Verification', ...
-         'Level 3: estimator\_optical\_flow\_vel  (PX4 EKF, fused & smoothed)'}, ...
-        'FontWeight', 'bold');
+sgtitle('Task 2 - Optical Flow Measurement Model Accuracy Verification', 'FontWeight', 'bold');
 
 % -------------------------------------------------------------------------
 %% Save all figures
-saveas(fig1, fullfile(project_dir, 'Task2_Lv1_raw.png'));
-saveas(fig2, fullfile(project_dir, 'Task2_Lv2_vehicle.png'));
-saveas(fig3, fullfile(project_dir, 'Task2_Lv3_ekf.png'));
-fprintf('\nFigures saved: Task2_Lv1_raw.png / Task2_Lv2_vehicle.png / Task2_Lv3_ekf.png\n');
-
-% =========================================================================
-%% Local helper function
-function plot_comparison(t, pred, meas, c_pred, c_meas, ylbl, ttl)
-% Plots model prediction vs one measurement signal on the current axes.
-    hold on; grid on;
-    plot(t, meas, '-',  'Color', [c_meas 0.6], 'LineWidth', 0.8, ...
-        'DisplayName', 'Measurement');
-    plot(t, pred, '-',  'Color', c_pred, 'LineWidth', 1.8, ...
-        'DisplayName', 'h(x) | GPS (prediction)');
-    xlabel('Time (s)');
-    ylabel(ylbl);
-    title(ttl, 'FontSize', 9);
-    legend('Location', 'best', 'FontSize', 8);
-    xlim([t(1), t(end)]);
-end
+set(fig, 'PaperPositionMode', 'auto');
+print(fig, fullfile(project_dir, sprintf('Task2_%s', num_only)), '-dpng', '-r600');
+fprintf('\nFigure saved: Task2_%s.png\n', num_only);

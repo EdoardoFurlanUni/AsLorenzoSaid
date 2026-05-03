@@ -11,8 +11,7 @@ folder_num = input('Please enter the data number to be read:','s');
 % 50_2025-10-18-11-09-00
 
 % Constructing a folder path
-% base_path = fileparts(mfilename('fullpath'));
-base_path = pwd;
+base_path = fileparts(mfilename('fullpath'));
 folder_name = sprintf('log_%s', folder_num);
 full_folder_path = fullfile(base_path, folder_name);
 
@@ -77,9 +76,9 @@ file_att = fullfile(full_folder_path, sprintf('log_%s_vehicle_attitude_0.csv', f
 
 % data
 att = readtable(file_att);
-% 1: Timestamp
+% 2: Timestamp
 % 3-6: Quaternions q[0], q[1], q[2], q[3]
-att_tbl = table2array(att(:,[1,3:6]));
+att_tbl = table2array(att(:,[2,3:6]));
 
 %%%%%%%%%%%%%%%%%%%%%%%%% Optical flow and Distance %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Level 3: Estimator optical flow
@@ -91,15 +90,14 @@ flow_tbl = table2array(optic(:, [2, 3, 4, 5, 6]));
 %% Level 2: Vehicle optical flow
 file_veh_flow = fullfile(full_folder_path, sprintf('log_%s_vehicle_optical_flow_0.csv', folder_num));
 veh_flow = readtable(file_veh_flow);
-% Cols: timestamp(1), pixel_flow[0](4), pixel_flow[1](5), distance_m(9), integration_timespan_us(10)
-veh_flow_tbl = table2array(veh_flow(:, [1, 4, 5, 9, 10]));
+% Cols: timestamp(2), pixel_flow[0](4), pixel_flow[1](5), integration_timespan_us(10)
+veh_flow_tbl = table2array(veh_flow(:, [2, 4, 5, 10]));
 
-%% Level 1: Raw sensor optical flow (no gyro compensation)
+%% Level 1: Raw sensor optical flow 
 file_raw_flow = fullfile(full_folder_path, sprintf('log_%s_sensor_optical_flow_0.csv', folder_num));
 raw_flow = readtable(file_raw_flow);
-% Here we use distance_sensor_0 (dist_tbl) for height, passed into sync_all_sensors.
-% Extract: [timestamp(1), pixel_flow[0](4), pixel_flow[1](5), integration_timespan_us(10)]
-raw_flow_tbl = table2array(raw_flow(:, [1, 4, 5, 10]));  % 4 cols (no distance)
+% Cols: timestamp(2), pixel_flow[0](4), pixel_flow[1](5), integration_timespan_us(10)
+raw_flow_tbl = table2array(raw_flow(:, [2, 4, 5, 10]));  
 
 %% Distance data
 file_dist = fullfile(full_folder_path, sprintf('log_%s_distance_sensor_0.csv', folder_num));
@@ -120,8 +118,9 @@ dist_tbl = table2array(dist(:, [1, 5]));
 % baro_h     : height from barometer (m)
 % flow_v     : Level 3 - estimator_optical_flow body/NE velocities (m/s)
 % dist_h     : distance to ground (m)
+% q_sync     : synchronized quaternions [q0, q1, q2, q3]
 % raw_flow_v : Level 1 - body velocities from raw sensor_optical_flow (m/s)
-% veh_flow_v : Level 2 - body velocities from vehicle_optical_flow, gyro-comp (m/s)
+% veh_flow_v : Level 2 - body velocities from vehicle_optical_flow (m/s)
 
 
 %% GPS-denied setting 
@@ -132,56 +131,60 @@ gps_den = denied(gps_mea, Time_start,... % Start time of denial
                Delta... % Data frequency
                );
 
-save('data_sync.mat');
+num_only = strtok(folder_num, '_');
+save(sprintf('data_sync_%s.mat', num_only));
 
 %% Figure
 figure(1)
-plot(gps_gt(:,4), 'b'); hold on,
-plot(gps_mea(:,4), 'c'); hold on,
-plot(gps_den(:,4), 'r');           
-xlabel('North');
-ylabel('South');
+plot(gps_gt(:,4), 'b'); hold on
+plot(gps_mea(:,4), 'c');
+plot(gps_den(:,4), 'r');
+xlabel('Sample index');
+ylabel('North position (m)');
 legend('Ground truth','Measurements','Denied data');
 
 figure(2)
-plot(gps_gt(:,6), 'b'); hold on,
-plot(baro_h(:,1),'r')
-ylabel('Altitude');
-legend('Alt_{GPS}','Alt_{Baro}');
+plot(-gps_gt(:,6), 'b'); hold on
+plot(-baro_h(:,1), 'r');
+plot(dist_h, 'g');
+xlabel('Sample index');
+ylabel('Altitude (m)');
+legend('Alt_{GPS}','Alt_{Baro}','Alt_{Dist}');
 
 figure(3)
 subplot(1,2,1)
-plot(flow_v(:,3), 'c-'); hold on,
-plot(gps_gt(:,1), 'b'); 
-ylabel('x');
+plot(flow_v(:,3), 'c-'); hold on
+plot(gps_gt(:,1), 'b');
+xlabel('Sample index'); ylabel('v_N (m/s)');
+legend('v_{flow}','v_{gps}');
 subplot(1,2,2)
-plot(flow_v(:,4), 'c-'); hold on,
-plot(gps_gt(:,2), 'b'); 
-ylabel('y');
+plot(flow_v(:,4), 'c-'); hold on
+plot(gps_gt(:,2), 'b');
+xlabel('Sample index'); ylabel('v_E (m/s)');
 legend('v_{flow}','v_{gps}');
 
 figure(4)
 subplot(1,3,1)
-plot(dtheta(:,1), 'c-'); 
-ylabel('x');
+plot(dtheta(:,1), 'c-');
+xlabel('Sample index'); ylabel('\Delta\theta_x (rad)');
 subplot(1,3,2)
-plot(dtheta(:,2), 'c-');  
-ylabel('y');
+plot(dtheta(:,2), 'c-');
+xlabel('Sample index'); ylabel('\Delta\theta_y (rad)');
 subplot(1,3,3)
-plot(dtheta(:,3), 'c-'); 
-ylabel('z');
+plot(dtheta(:,3), 'c-');
+xlabel('Sample index'); ylabel('\Delta\theta_z (rad)');
 legend('\Delta_{\theta}');
 
 figure(5)
 subplot(1,3,1)
-plot(dv(:,1), 'c-'); 
-ylabel('x');
+plot(dv(:,1), 'c-');
+xlabel('Sample index'); ylabel('\Deltav_x (m/s)');
 subplot(1,3,2)
-plot(dv(:,2), 'c-'); 
-ylabel('y');
+plot(dv(:,2), 'c-');
+xlabel('Sample index'); ylabel('\Deltav_y (m/s)');
 subplot(1,3,3)
-plot(dv(:,3), 'c-'); 
-ylabel('z'); % z not y (?)
+plot(dv(:,3), 'c-');
+xlabel('Sample index'); ylabel('\Deltav_z (m/s)');
 legend('\Delta_{v}');
 
 %% IMU Scale Bug Verification

@@ -1,13 +1,18 @@
-function [z] = func_h(sym_x)
-    %% h(x) - Optical Flow Measurement Model
-    % sym_x: 16x1 symbolic state vector
+function [z] = func_h(x)
+    %% h(x): Optical Flow Sensor + Barometer Measurement Model [Task 1]
+
+    % x: 16x1 state vector
     % 1:4   - Quaternions (q0, q1, q2, q3)
     % 5:7   - Velocity NED (vn, ve, vd)
     % 8:10  - Position NED (pn, pe, pd)
+
+    % z: 3x1 predicted output vector
+    % 1:2   - X,Y Velocity Body (vx, vy) --> compared with optical flow measurements
+    % 3     - Down Position NED (pd) --> compared with barometer measurement
     
-    q = sym_x(1:4);
-    v_n = sym_x(5:7);
-    p_d = sym_x(10);
+    q = x(1:4);
+    v_n = x(5:7);
+    pd = x(10);
     
     % Direction Cosine Matrix (Body to Nav) - R_b2n
     % We need Nav to Body (R_n2b), which is the transpose
@@ -21,9 +26,9 @@ function [z] = func_h(sym_x)
     
     v_b = R_n2b * v_n;
     
-    % Measurements: [v_body_x; v_body_y; pos_ned_z]
+    
     z = [v_b(1);
          v_b(2);
-         p_d];
+         pd];
 end
 

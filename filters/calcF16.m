@@ -1,15 +1,14 @@
-function [F] = calcF16(Delta_t,Delta_theta_m,x_t,Delta_theta_n,Delta_v_m,q0,q1,q2,q3)
+function [F] = calcF16(Delta_t,Delta_theta_m,x_t,Delta_v_m,q0,q1,q2,q3)
 % Delta_theta_m,Delta_v_m: Input
 % x_t: State filter $\hat x_{t|t}$ at time t
 % q0,q1,q2,q3: Estimate quaternion
-% Delta_theta_n,Delta_v_n: Parameters w.r.t. process noise
 
 F=zeros(16,16);
 %% F^{q_{k+1}}_{q_k} in Eq. 78
 F(1,1) = 1;
-F(1,2) = -(Delta_theta_m(1)-x_t(11)-Delta_theta_n(1))/2;
-F(1,3) =  -(Delta_theta_m(2)-x_t(12)-Delta_theta_n(2))/2;
-F(1,4) =  -(Delta_theta_m(3)-x_t(13)-Delta_theta_n(3))/2;
+F(1,2) = -(Delta_theta_m(1)-x_t(11))/2;
+F(1,3) = -(Delta_theta_m(2)-x_t(12))/2;
+F(1,4) = -(Delta_theta_m(3)-x_t(13))/2;
 F(2,1) = -F(1,2);F(2,2) = 1;F(2,3) = -F(1,4);F(2,4)=F(1,3);
 F(3,1) = -F(2,4);F(3,2)=F(1,4);F(3,3)=1;F(3,4)=-F(1,2);
 F(4,1) = -F(1,4);F(4,2) = -F(1,3);F(4,3) =F(1,2);F(4,4)=1;

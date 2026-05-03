@@ -1,10 +1,11 @@
-function [y] =  denied(y, T, I, Detla)
+function [y] = denied(y, T, I, Detla)
 % T: Start time of denial
 % I: Duration of the denial
-% Detal: Data frequency (Here is w.r.p to IMU)
+% Detla: Data frequency (Here is w.r.p to IMU)
 
-% GPS denied data 
-for k=T*Detla+1:(T+I)*Detla
+% GPS denied data
+N = size(y, 1);
+for k = T*Detla+1 : min((T+I)*Detla, N)
     y(k,:) = y(T*Detla,:);
 end
 
