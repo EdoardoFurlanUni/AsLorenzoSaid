@@ -1,30 +1,12 @@
-function [x_new, P_new, theta] = RUKF_UAV(x, y, P, R, dtheta, dv, Delta_theta_n, Delta_v_n, wb, ab, dt, mode, c)
-%% RUKF for 16D UAV state  [ref: filters/RUKF.m, Algorithm steps 1-13]
-%
-% Inputs:
-%   x    : 16x1  x_hat_t  (state prediction at time t)
-%   y    : measurement vector (6x1 GPS+baro or 3x1 flow+baro)
-%   P    : 16x16 P_tilde_t  (robustified covariance at time t)
-%   R    : measurement noise covariance DD^T
-%   dtheta, dv    : IMU angular/velocity increments (1x3 each)
-%   Delta_theta_n : 3x1 angular increment noise std dev
-%   Delta_v_n     : 3x1 velocity increment noise std dev
-%   wb            : 3x1 gyro bias noise std dev
-%   ab            : 3x1 accel bias noise std dev
-%   dt   : sampling interval (s)
-%   mode : 'gps' or 'flow'
-%   c    : robustness parameter (scalar, > 0)
-%       
-%
-% Outputs:
-%   x_new  : 16x1  x_hat_{t+1}     (predicted state)
-%   P_new  : 16x16 P_tilde_{t+1}   (robustified predicted covariance)
-%   theta  : scalar theta_t found at this step
-
+function [x_new, P_new, theta] = RUKF_UAV(x, y, P, R, dtheta, dv, Delta_theta_n, Delta_v_n, wb, ab, dt, mode, c, alpha)
+% ... (skipping some comments for brevity in header)
+if nargin < 14
+    alpha = 0.1;
+end
 n = 16;
 
 %% Scaling parameters  [ref: Wan & Van der Merwe, 2001]
-alpha  = 0.1; % small positive value (10^-4 ~ 1)
+% alpha is now an input parameter, defaults to 0.1
 kapa   = 3 - n;
 lambda = alpha^2 * (kapa + n) - n;
 beta   = 2;   % for Gaussian 2 is optimal

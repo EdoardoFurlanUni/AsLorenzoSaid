@@ -15,8 +15,8 @@ clear; clc; close all;
 % Robustness parameters (TUNED: optimized for minimum 3D Position RMSE)
 % c_grid = [1e-12, 1e-11, 1e-10, 1e-09, 1e-08, 1e-07, 1e-06, 1e-05] for tuning
 data_ids = {'48'; '49'};
-c_rekf_vals = [1e-08; 1e-06];
-c_rukf_vals = [1e-07; 1e-07];
+c_rekf_vals = [1e-12; 1e-06];
+c_rukf_vals = [1e-08; 1e-06];
 params = table(c_rekf_vals, c_rukf_vals, 'RowNames', data_ids);
 
 data_num  = '48'; % SELECT dataset 48 or 49
@@ -45,7 +45,7 @@ dt = 1 / Delta;
 %% 2. GPS-denied interval
 % T_deny: start of denial (s from beginning), I_deny: duration (s)
 T_deny = 100;
-I_deny = 100;
+I_deny = 50;
 
 gps_denied = denied(gps_mea, T_deny, I_deny, Delta);
 
@@ -74,36 +74,48 @@ wb            = [2.6e-6; 2.6e-6; 2.6e-6;];     % gyro bias random walk std dev
 ab            = [1.66e-4; 1.66e-4; 1.66e-4;];  % accel bias random walk std dev 
 
 % Measurement noise
-R_gps  = diag([0.05^2*ones(2,1); 0.1^2; 0.3^2*ones(2,1); 0.4^2]);  % 6x6: vel (m/s), pos (m)
-R_flow = diag([0.5^2; 0.4^2; 0.4^2]);  % (task2)                   % 3x3: vbx, vby (m/s), pd (m)
+R_gps  = diag([(0.5*0.05)^2; (0.5*0.05)^2; (0.001*0.1)^2; (0.05*0.3)^2; (0.05*0.3)^2; 0.4^2]);  % Tuned 6x6
+R_flow = diag([(3.0*0.5)^2; (0.25*0.4)^2; 0.4^2]);  % Tuned 3x3
 
-% Online outlier gating: sliding window mean + 3*sigma
-% Precompute per-step thresholds using only PAST data (causal)
-W = 200;   % window size (~5 seconds at 40Hz)
-FALLBACK_THR = 5.0;  % conservative fallback before buffer fills (m/s)
+% Online outlier gating: Exponential Moving Average (EMA) with forgetting factor
+% mu_k     = lam * mu_{k-1}     + (1-lam) * |x_k|        (tracks mean of |v|)
+% sigma_k  = lam * sigma_{k-1}  + (1-lam) * (x_k - mu)^2 (tracks variance)
+% threshold = mu_k + 3 * sqrt(sigma_k)
+lam = 0.98;  % forgetting factor: higher = slower adaptation (0.95~0.99 typical)
+
+% Initialize with first sample
+mu_x  = abs(veh_flow_v(1,1));  var_x = 0;
+mu_y  = abs(veh_flow_v(1,2));  var_y = 0;
 
 VEL_THR_x = zeros(N, 1);
 VEL_THR_y = zeros(N, 1);
+VEL_THR_x(1) = 5.0;  % conservative initial threshold
+VEL_THR_y(1) = 5.0;
 
-for k = 1:N
-    win_start = max(1, k - W);
-    win_x = veh_flow_v(win_start:k-1, 1);  % only past samples (not current)
-    win_y = veh_flow_v(win_start:k-1, 2);
-    
-    if length(win_x) >= 20  % need enough samples for meaningful statistics
-        VEL_THR_x(k) = mean(abs(win_x), 'omitnan') + 3 * std(win_x, 'omitnan');
-        VEL_THR_y(k) = mean(abs(win_y), 'omitnan') + 3 * std(win_y, 'omitnan');
-    else
-        VEL_THR_x(k) = FALLBACK_THR;
-        VEL_THR_y(k) = FALLBACK_THR;
+burn_in = 100;
+
+for k = 2:N
+    xk = veh_flow_v(k-1, 1); 
+    yk = veh_flow_v(k-1, 2);
+    % Robust EMA: only update if sample is NOT an outlier
+    % Always update during the burn-in period to initialize variance
+    if k < burn_in || abs(xk) < VEL_THR_x(k-1)
+        mu_x  = lam * mu_x  + (1 - lam) * abs(xk);
+        var_x = lam * var_x + (1 - lam) * (xk - mu_x)^2;
     end
+    if k < burn_in || abs(yk) < VEL_THR_y(k-1)
+        mu_y  = lam * mu_y  + (1 - lam) * abs(yk);
+        var_y = lam * var_y + (1 - lam) * (yk - mu_y)^2;
+    end
+    
+    VEL_THR_x(k) = max(mu_x + 3 * sqrt(var_x), 1.0);
+    VEL_THR_y(k) = max(mu_y + 3 * sqrt(var_y), 1.0);
 end
 
 fprintf('====================================================\n');
-fprintf('Online Gating: sliding window W=%d (~%.1f s)\n', W, W/Delta);
-fprintf('  Threshold X range: [%.3f, %.3f] m/s\n', min(VEL_THR_x), max(VEL_THR_x));
-fprintf('  Threshold Y range: [%.3f, %.3f] m/s\n', min(VEL_THR_y), max(VEL_THR_y));
-fprintf('  Fallback (first %d samples): %.1f m/s\n', 20, FALLBACK_THR);
+fprintf('Online Gating: EMA forgetting factor = %.2f\n', lam);
+fprintf('  Threshold X range: [%.3f, %.3f] m/s\n', min(VEL_THR_x(100:end)), max(VEL_THR_x(100:end)));
+fprintf('  Threshold Y range: [%.3f, %.3f] m/s\n', min(VEL_THR_y(100:end)), max(VEL_THR_y(100:end)));
 fprintf('====================================================\n');
 
 %% 5. Filter Loops (EKF, UKF, REKF, RUKF)
@@ -146,7 +158,7 @@ for k = 1:N-1
         if abs(y_k(2)) > VEL_THR_y(k), R_k(2,2) = R_k(2,2) * 1e6; end
     end
 
-    [X_ukf(:,k+1), P_ukf] = UKF_UAV(X_ukf(:,k), y_k, P_ukf, R_k, dth, dvk, Delta_theta_n, Delta_v_n, wb, ab, dt, md);
+    [X_ukf(:,k+1), P_ukf] = UKF_UAV(X_ukf(:,k), y_k, P_ukf, R_k, dth, dvk, Delta_theta_n, Delta_v_n, wb, ab, dt, md, 0.50);
 end
 time_ukf = toc;
 fprintf('UKF_UAV done in %.2f s\n', time_ukf);
@@ -180,7 +192,7 @@ for k = 1:N-1
         if abs(y_k(2)) > VEL_THR_y(k), R_k(2,2) = R_k(2,2) * 1e6; end
     end
 
-    [X_rukf(:,k+1), P_rukf, theta_rukf(k)] = RUKF_UAV(X_rukf(:,k), y_k, P_rukf, R_k, dth, dvk, Delta_theta_n, Delta_v_n, wb, ab, dt, md, c_rukf);
+    [X_rukf(:,k+1), P_rukf, theta_rukf(k)] = RUKF_UAV(X_rukf(:,k), y_k, P_rukf, R_k, dth, dvk, Delta_theta_n, Delta_v_n, wb, ab, dt, md, c_rukf, 0.50);
 end
 time_rukf = toc;
 fprintf('RUKF_UAV done in %.2f s\n', time_rukf);

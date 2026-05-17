@@ -1,35 +1,30 @@
-%% GRID SEARCH: Fine-tuning filter parameters
+%% GRID SEARCH: R_gps and R_flow tuning on EKF (dataset 49)
 % =========================================================================
-%   Phase 1: Tune R_gps scaling using EKF only (fastest filter)
-%   Phase 2: Tune c_rekf and c_rukf with the best R_gps from Phase 1
-%   Alpha tuning: done separately on UKF by modifying UKF_UAV.m
-%
-%   Run this script from the project/ folder.
-%   Change data_num below to test different datasets.
+%   Tunes measurement noise covariances using EKF only.
+%   R_gps RMSE is computed on GPS-available periods only.
+%   R_flow RMSE is computed on GPS-denied period only.
+%   After finding best R_gps and R_flow, runs a separate alpha grid on UKF.
+%   Performs sequential 1D sweeps (Coordinate Descent) to change parameters 
+%   individually.
 % =========================================================================
 clear; clc; close all;
 
-data_num = '49';  % <-- CHANGE THIS FOR EACH DATASET
+data_num = '49';
 
-%% Setup paths and load data
+%% Setup
 project_dir = fileparts(mfilename('fullpath'));
-filters_dir = fullfile(project_dir, '..', 'filters');
-data_dir    = fullfile(project_dir, '..', 'Data', 'mat');
-addpath(filters_dir);
-addpath(data_dir);
+addpath(fullfile(project_dir, '..', 'filters'));
+addpath(fullfile(project_dir, '..', 'Data', 'mat'));
 
-data_path = fullfile(data_dir, sprintf('data_sync_%s.mat', data_num));
-if ~exist(data_path, 'file')
-    error('Run DATA_PROCESS.m first for dataset %s', data_num);
-end
+data_path = fullfile(project_dir, '..', 'Data', 'mat', sprintf('data_sync_%s.mat', data_num));
 fprintf('Loading dataset %s...\n', data_num);
 load(data_path);
 
 N  = length(t_sync);
 dt = 1 / Delta;
 
-%% GPS-denied interval (same as task34)
-T_deny = 100; I_deny = 100;
+%% GPS-denied interval
+T_deny = 100; I_deny = 40;
 gps_denied = denied(gps_mea, T_deny, I_deny, Delta);
 
 deny_start = T_deny * Delta + 1;
@@ -37,218 +32,159 @@ deny_end   = min((T_deny + I_deny) * Delta, N);
 mode_vec   = repmat({'gps'}, N, 1);
 mode_vec(deny_start:deny_end) = {'flow'};
 
-%% Initialization (same as task34)
+% Index masks for RMSE evaluation
+idx_gps  = setdiff(1:N-1, deny_start:deny_end);   % GPS-available steps
+idx_flow = deny_start:min(deny_end, N-1);         % GPS-denied steps
+
+%% Init
 x0 = [q_sync(1,:)'; gps_gt(1,1:3)'; gps_gt(1,4:5)'; -dist_h(1);
       2.7556e-6*ones(3,1); 6.7600e-11*ones(3,1)];
 P0 = 1e-4 * eye(16);
 
-%% Noise parameters (fixed)
 Delta_theta_n = [2.6e-5; 2.6e-5; 2.6e-5];
 Delta_v_n     = [1.66e-3; 1.66e-3; 1.66e-3];
 wb            = [2.6e-6; 2.6e-6; 2.6e-6];
 ab            = [1.66e-4; 1.66e-4; 1.66e-4];
 
-R_flow = diag([0.5^2; 0.4^2; 0.4^2]);
+%% EMA thresholds (precompute once, same for all grid runs)
+lam = 0.98;
+mu_x = abs(veh_flow_v(1,1)); var_x = 0;
+mu_y = abs(veh_flow_v(1,2)); var_y = 0;
+VEL_THR_x = zeros(N,1); VEL_THR_y = zeros(N,1);
+VEL_THR_x(1) = 5.0; VEL_THR_y(1) = 5.0;
 
-%% Gating thresholds (dynamic, same as task34)
-mean_x = mean(abs(veh_flow_v(:,1)), 'omitnan');
-std_x  = std(veh_flow_v(:,1), 'omitnan');
-mean_y = mean(abs(veh_flow_v(:,2)), 'omitnan');
-std_y  = std(veh_flow_v(:,2), 'omitnan');
-VEL_THRESHOLD_x = mean_x + 3 * std_x;
-VEL_THRESHOLD_y = mean_y + 3 * std_y;
+burn_in = 100;
+for k = 2:N
+    xk = veh_flow_v(k-1,1); yk = veh_flow_v(k-1,2);
+    if k < burn_in || abs(xk) < VEL_THR_x(k-1)
+        mu_x = lam*mu_x + (1-lam)*abs(xk);
+        var_x = lam*var_x + (1-lam)*(xk-mu_x)^2;
+    end
+    if k < burn_in || abs(yk) < VEL_THR_y(k-1)
+        mu_y = lam*mu_y + (1-lam)*abs(yk);
+        var_y = lam*var_y + (1-lam)*(yk-mu_y)^2;
+    end
+    
+    VEL_THR_x(k) = max(mu_x + 3 * sqrt(var_x), 1.0);
+    VEL_THR_y(k) = max(mu_y + 3 * sqrt(var_y), 1.0);
+end
 
 %% Ground truth
-idx = 1:N-1;
-gt_vel = gps_gt(idx, 1:3);
-gt_pos = [gps_gt(idx, 4:5), -dist_h(idx)];
+gt_vel = gps_gt(1:N-1, 1:3);
+gt_pos = [gps_gt(1:N-1, 4:5), -dist_h(1:N-1)];
 calc_rmse = @(est, gt) sqrt(mean(sum((est - gt).^2, 2)));
 
+%% Helper: run EKF with given R_gps and R_flow
+run_ekf = @(R_gps, R_flow) run_ekf_inner(N, x0, P0, mode_vec, gps_denied, ...
+    veh_flow_v, baro_h, dtheta, dv, Delta_theta_n, Delta_v_n, wb, ab, dt, ...
+    R_gps, R_flow, VEL_THR_x, VEL_THR_y);
+
 %% ========================================================================
-%% PHASE 1: R_gps scaling grid search (EKF only)
+%% PHASE 1: R_gps tuning (Sequential 1D Sweeps on GPS zones)
 %% ========================================================================
-fprintf('\n=== PHASE 1: R_gps scaling (EKF) ===\n');
+fprintf('\n=== PHASE 1: R_gps tuning (1D Sweeps) ===\n');
 
-% Base R_gps structure: diag([vel_h^2, vel_h^2, vel_d^2, pos_h^2, pos_h^2, pos_d^2])
-% We test different scaling factors for velocity and position components
-vel_scales = [0.5, 0.75, 1.0, 1.5, 2.0, 3.0];    % multiply the velocity std devs
-pos_scales = [0.5, 0.75, 1.0, 1.5, 2.0, 3.0];    % multiply the position std devs
+% Base values
+bv_h = 0.05; bv_d = 0.1;   % velocity std (m/s)
+bp_h = 0.3;  bp_d = 0.4;   % position std (m)
 
-% Base values from task34
-base_vel_h = 0.05; base_vel_d = 0.1;   % m/s
-base_pos_h = 0.3;  base_pos_d = 0.4;   % m
+gps_scales = []; % Skipped
+m_gps = [0.5, 0.5, 0.001, 0.05, 0.05]; % Locked to optimal tuned values
 
-n_vel = length(vel_scales);
-n_pos = length(pos_scales);
-rmse_p_grid = zeros(n_vel, n_pos);
-rmse_v_grid = zeros(n_vel, n_pos);
+% Bypass Phase 1 search to focus on Phase 2 & 3
+fprintf('  => Phase 1 bypassed. Using optimal m_gps = [%.3f, %.3f, %.3f, %.3f, %.3f]\n', m_gps);
 
-total_runs = n_vel * n_pos;
-run_count = 0;
+R_gps_best = diag([(m_gps(1)*bv_h)^2; (m_gps(2)*bv_h)^2; (m_gps(3)*bv_d)^2;
+                   (m_gps(4)*bp_h)^2; (m_gps(5)*bp_h)^2; bp_d^2]);
 
-for iv = 1:n_vel
-    for ip = 1:n_pos
-        run_count = run_count + 1;
-        
-        sv = vel_scales(iv);
-        sp = pos_scales(ip);
-        
-        R_gps_test = diag([(sv*base_vel_h)^2; (sv*base_vel_h)^2; (sv*base_vel_d)^2;
-                           (sp*base_pos_h)^2; (sp*base_pos_h)^2; (sp*base_pos_d)^2]);
-        
-        % Run EKF
-        X_ekf = zeros(16, N); X_ekf(:,1) = x0; P_ekf = P0;
-        
-        for k = 1:N-1
-            md = mode_vec{k}; dth = dtheta(k,:); dvk = dv(k,:);
-            if strcmp(md, 'gps')
-                y_k = [gps_denied(k,1:5)'; baro_h(k,1)]; R_k = R_gps_test;
-            else
-                y_k = [veh_flow_v(k,1:2)'; baro_h(k,1)]; R_k = R_flow;
-                if abs(y_k(1)) > VEL_THRESHOLD_x, R_k(1,1) = R_k(1,1) * 1e6; end
-                if abs(y_k(2)) > VEL_THRESHOLD_y, R_k(2,2) = R_k(2,2) * 1e6; end
-            end
-            [X_ekf(:,k+1), P_ekf] = EKF_UAV(X_ekf(:,k), y_k, P_ekf, R_k, dth, dvk, ...
-                Delta_theta_n, Delta_v_n, wb, ab, dt, md);
-        end
-        
-        rmse_p_grid(iv, ip) = calc_rmse(X_ekf(8:10, idx)', gt_pos);
-        rmse_v_grid(iv, ip) = calc_rmse(X_ekf(5:7, idx)', gt_vel);
-        
-        fprintf('[%2d/%2d] vel_scale=%.2f, pos_scale=%.2f => Pos RMSE=%.4f m, Vel RMSE=%.4f m/s\n', ...
-            run_count, total_runs, sv, sp, rmse_p_grid(iv,ip), rmse_v_grid(iv,ip));
-    end
+%% ========================================================================
+%% PHASE 2: R_flow tuning (Sequential 1D Sweeps on GPS-denied zone)
+%% ========================================================================
+fprintf('\n=== PHASE 2: R_flow tuning (1D Sweeps) ===\n');
+
+flow_scales_list = {}; % Skipped
+m_flow = [3.0, 0.25]; % Locked to optimal tuned values
+
+% Bypass Phase 2 search to focus on Phase 3
+fprintf('  => Phase 2 bypassed. Using optimal m_flow = [%.3f, %.3f]\n', m_flow);
+
+bf_vx = 0.5; bf_vy = 0.4; bf_pd = 0.4;
+R_flow_best = diag([(m_flow(1)*bf_vx)^2; (m_flow(2)*bf_vy)^2; bf_pd^2]);
+
+%% ========================================================================
+%% PHASE 3: Alpha grid (test on full timeline with UKF)
+%% ========================================================================
+fprintf('\n=== PHASE 3: Alpha tuning (RMSE on full timeline, UKF) ===\n');
+
+alpha_scales = [1e-4, 5e-4, 1e-3, 5e-3, 0.01, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0];
+n_alpha = length(alpha_scales);
+rmse_ukf_alpha = zeros(n_alpha, 1);
+
+for ia = 1:n_alpha
+    a = alpha_scales(ia);
+    X_ukf = run_ukf_inner(N, x0, P0, mode_vec, gps_denied, ...
+        veh_flow_v, baro_h, dtheta, dv, Delta_theta_n, Delta_v_n, wb, ab, dt, ...
+        R_gps_best, R_flow_best, VEL_THR_x, VEL_THR_y, a);
+    
+    rmse_ukf_alpha(ia) = calc_rmse(X_ukf(8:10, 1:N-1)', gt_pos(1:N-1,:));
+    fprintf('  alpha=%.2f => UKF Pos RMSE = %.4f m\n', a, rmse_ukf_alpha(ia));
 end
 
-% Find best R_gps
-[min_rmse_p, min_idx] = min(rmse_p_grid(:));
-[best_iv, best_ip] = ind2sub(size(rmse_p_grid), min_idx);
-best_vel_scale = vel_scales(best_iv);
-best_pos_scale = pos_scales(best_ip);
-
-fprintf('\n>>> BEST R_gps: vel_scale=%.2f, pos_scale=%.2f => Pos RMSE=%.4f m\n\n', ...
-    best_vel_scale, best_pos_scale, min_rmse_p);
-
-% Build best R_gps for Phase 2
-R_gps_best = diag([(best_vel_scale*base_vel_h)^2; (best_vel_scale*base_vel_h)^2; (best_vel_scale*base_vel_d)^2;
-                    (best_pos_scale*base_pos_h)^2; (best_pos_scale*base_pos_h)^2; (best_pos_scale*base_pos_d)^2]);
-
-%% ========================================================================
-%% PHASE 2: c grid search for REKF and RUKF (with best R_gps)
-%% ========================================================================
-fprintf('=== PHASE 2: c tuning for REKF and RUKF ===\n');
-
-c_grid = [0, 1e-12, 1e-11, 1e-10, 1e-09, 1e-08, 1e-07, 1e-06, 1e-05, 1e-04];
-
-n_c = length(c_grid);
-rmse_p_rekf = zeros(n_c, 1);
-rmse_v_rekf = zeros(n_c, 1);
-rmse_p_rukf = zeros(n_c, 1);
-rmse_v_rukf = zeros(n_c, 1);
-
-% --- REKF ---
-fprintf('\n--- REKF ---\n');
-for ic = 1:n_c
-    c_test = c_grid(ic);
-    
-    X_rekf = zeros(16, N); X_rekf(:,1) = x0; P_rekf = P0;
-    
-    for k = 1:N-1
-        md = mode_vec{k}; dth = dtheta(k,:); dvk = dv(k,:);
-        if strcmp(md, 'gps')
-            y_k = [gps_denied(k,1:5)'; baro_h(k,1)]; R_k = R_gps_best;
-        else
-            y_k = [veh_flow_v(k,1:2)'; baro_h(k,1)]; R_k = R_flow;
-            if abs(y_k(1)) > VEL_THRESHOLD_x, R_k(1,1) = R_k(1,1) * 1e6; end
-            if abs(y_k(2)) > VEL_THRESHOLD_y, R_k(2,2) = R_k(2,2) * 1e6; end
-        end
-        [X_rekf(:,k+1), P_rekf, ~] = REKF_UAV(X_rekf(:,k), y_k, P_rekf, R_k, dth, dvk, ...
-            Delta_theta_n, Delta_v_n, wb, ab, dt, md, c_test);
-    end
-    
-    rmse_p_rekf(ic) = calc_rmse(X_rekf(8:10, idx)', gt_pos);
-    rmse_v_rekf(ic) = calc_rmse(X_rekf(5:7, idx)', gt_vel);
-    
-    fprintf('  c=%.1e => Pos RMSE=%.4f m, Vel RMSE=%.4f m/s\n', c_test, rmse_p_rekf(ic), rmse_v_rekf(ic));
-end
-
-[best_rmse_rekf, best_ic_rekf] = min(rmse_p_rekf);
-fprintf('>>> BEST REKF: c=%.1e => Pos RMSE=%.4f m\n\n', c_grid(best_ic_rekf), best_rmse_rekf);
-
-% --- RUKF ---
-fprintf('--- RUKF ---\n');
-for ic = 1:n_c
-    c_test = c_grid(ic);
-    
-    X_rukf = zeros(16, N); X_rukf(:,1) = x0; P_rukf = P0;
-    
-    for k = 1:N-1
-        md = mode_vec{k}; dth = dtheta(k,:); dvk = dv(k,:);
-        if strcmp(md, 'gps')
-            y_k = [gps_denied(k,1:5)'; baro_h(k,1)]; R_k = R_gps_best;
-        else
-            y_k = [veh_flow_v(k,1:2)'; baro_h(k,1)]; R_k = R_flow;
-            if abs(y_k(1)) > VEL_THRESHOLD_x, R_k(1,1) = R_k(1,1) * 1e6; end
-            if abs(y_k(2)) > VEL_THRESHOLD_y, R_k(2,2) = R_k(2,2) * 1e6; end
-        end
-        [X_rukf(:,k+1), P_rukf, ~] = RUKF_UAV(X_rukf(:,k), y_k, P_rukf, R_k, dth, dvk, ...
-            Delta_theta_n, Delta_v_n, wb, ab, dt, md, c_test);
-    end
-    
-    rmse_p_rukf(ic) = calc_rmse(X_rukf(8:10, idx)', gt_pos);
-    rmse_v_rukf(ic) = calc_rmse(X_rukf(5:7, idx)', gt_vel);
-    
-    fprintf('  c=%.1e => Pos RMSE=%.4f m, Vel RMSE=%.4f m/s\n', c_test, rmse_p_rukf(ic), rmse_v_rukf(ic));
-end
-
-[best_rmse_rukf, best_ic_rukf] = min(rmse_p_rukf);
-fprintf('>>> BEST RUKF: c=%.1e => Pos RMSE=%.4f m\n\n', c_grid(best_ic_rukf), best_rmse_rukf);
+[~, mi_a] = min(rmse_ukf_alpha);
+best_alpha = alpha_scales(mi_a);
+fprintf('\n>>> BEST alpha: %.2f (RMSE=%.4f m)\n\n', best_alpha, rmse_ukf_alpha(mi_a));
 
 %% ========================================================================
 %% SUMMARY
 %% ========================================================================
-fprintf('\n==========================================================\n');
+fprintf('==========================================================\n');
 fprintf('          TUNING RESULTS - Dataset %s\n', data_num);
 fprintf('==========================================================\n');
-fprintf('Best R_gps:  vel_scale=%.2f, pos_scale=%.2f\n', best_vel_scale, best_pos_scale);
-fprintf('             R_gps = diag([%.4f, %.4f, %.4f, %.4f, %.4f, %.4f])\n', diag(R_gps_best)');
-fprintf('Best c_rekf: %.1e  (Pos RMSE = %.4f m)\n', c_grid(best_ic_rekf), best_rmse_rekf);
-fprintf('Best c_rukf: %.1e  (Pos RMSE = %.4f m)\n', c_grid(best_ic_rukf), best_rmse_rukf);
+fprintf('Best R_gps multipliers:  [%.3f, %.3f, %.3f, %.3f, %.3f] (v_N, v_E, v_D, p_N, p_E)\n', m_gps);
+fprintf('  = diag([%.4f, %.4f, %.4f, %.4f, %.4f, %.4f])\n', diag(R_gps_best)');
+fprintf('Best R_flow multipliers: [%.3f, %.3f] (v_X, v_Y)\n', m_flow);
+fprintf('  = diag([%.4f, %.4f, %.4f])\n', diag(R_flow_best)');
+fprintf('Best alpha (UKF): %.2f\n', best_alpha);
 fprintf('==========================================================\n');
 
-%% Plots
-figure('Name', sprintf('R_gps Grid - Dataset %s', data_num), ...
-       'NumberTitle', 'off', 'Units', 'normalized', 'OuterPosition', [0.1 0.3 0.5 0.5]);
-imagesc(pos_scales, vel_scales, rmse_p_grid);
-colorbar; colormap('jet');
-xlabel('Position Scale'); ylabel('Velocity Scale');
-title(sprintf('3D Position RMSE (m) - EKF - Dataset %s', data_num));
-set(gca, 'XTick', pos_scales, 'YTick', vel_scales);
-% Add text annotations
-for iv = 1:n_vel
-    for ip = 1:n_pos
-        text(pos_scales(ip), vel_scales(iv), sprintf('%.3f', rmse_p_grid(iv,ip)), ...
-            'HorizontalAlignment', 'center', 'FontSize', 8, 'Color', 'w');
+%% ========================================================================
+%% Local function: run EKF
+%% ========================================================================
+function X = run_ekf_inner(N, x0, P0, mode_vec, gps_denied, ...
+    veh_flow_v, baro_h, dtheta, dv, Delta_theta_n, Delta_v_n, wb, ab, dt, ...
+    R_gps, R_flow, VEL_THR_x, VEL_THR_y)
+
+    X = zeros(16, N); X(:,1) = x0; P = P0;
+    for k = 1:N-1
+        md = mode_vec{k}; dth = dtheta(k,:); dvk = dv(k,:);
+        if strcmp(md, 'gps')
+            y_k = [gps_denied(k,1:5)'; baro_h(k,1)]; R_k = R_gps;
+        else
+            y_k = [veh_flow_v(k,1:2)'; baro_h(k,1)]; R_k = R_flow;
+            if abs(y_k(1)) > VEL_THR_x(k), R_k(1,1) = R_k(1,1) * 1e6; end
+            if abs(y_k(2)) > VEL_THR_y(k), R_k(2,2) = R_k(2,2) * 1e6; end
+        end
+        [X(:,k+1), P] = EKF_UAV(X(:,k), y_k, P, R_k, dth, dvk, ...
+            Delta_theta_n, Delta_v_n, wb, ab, dt, md);
     end
 end
 
-figure('Name', sprintf('c Tuning - Dataset %s', data_num), ...
-       'NumberTitle', 'off', 'Units', 'normalized', 'OuterPosition', [0.55 0.3 0.45 0.5]);
-c_labels = arrayfun(@(x) sprintf('%.0e', x), c_grid, 'UniformOutput', false);
-c_labels{1} = '0';
+%% Local function: run UKF
+function X = run_ukf_inner(N, x0, P0, mode_vec, gps_denied, ...
+    veh_flow_v, baro_h, dtheta, dv, Delta_theta_n, Delta_v_n, wb, ab, dt, ...
+    R_gps, R_flow, VEL_THR_x, VEL_THR_y, alpha)
 
-subplot(1,2,1);
-bar(rmse_p_rekf);
-set(gca, 'XTickLabel', c_labels, 'XTickLabelRotation', 45);
-xlabel('c_{rekf}'); ylabel('3D Pos RMSE (m)');
-title('REKF'); grid on;
-
-subplot(1,2,2);
-bar(rmse_p_rukf);
-set(gca, 'XTickLabel', c_labels, 'XTickLabelRotation', 45);
-xlabel('c_{rukf}'); ylabel('3D Pos RMSE (m)');
-title('RUKF'); grid on;
-
-sgtitle(sprintf('c Tuning - Dataset %s', data_num));
-
-fprintf('\nDone! Now change data_num and re-run for the other datasets.\n');
+    X = zeros(16, N); X(:,1) = x0; P = P0;
+    for k = 1:N-1
+        md = mode_vec{k}; dth = dtheta(k,:); dvk = dv(k,:);
+        if strcmp(md, 'gps')
+            y_k = [gps_denied(k,1:5)'; baro_h(k,1)]; R_k = R_gps;
+        else
+            y_k = [veh_flow_v(k,1:2)'; baro_h(k,1)]; R_k = R_flow;
+            if abs(y_k(1)) > VEL_THR_x(k), R_k(1,1) = R_k(1,1) * 1e6; end
+            if abs(y_k(2)) > VEL_THR_y(k), R_k(2,2) = R_k(2,2) * 1e6; end
+        end
+        [X(:,k+1), P] = UKF_UAV(X(:,k), y_k, P, R_k, dth, dvk, ...
+            Delta_theta_n, Delta_v_n, wb, ab, dt, md, alpha);
+    end
+end
