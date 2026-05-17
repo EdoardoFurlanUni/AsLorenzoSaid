@@ -73,19 +73,33 @@ ab            = [1.66e-4; 1.66e-4; 1.66e-4;];  % accel bias random walk std dev
 R_gps  = diag([0.05^2*ones(2,1); 0.1^2; 0.3^2*ones(2,1); 0.4^2]);  % 6x6: vel (m/s), pos (m)
 R_flow = diag([0.5^2; 0.4^2; 0.4^2]);  % (task2)                   % 3x3: vbx, vby (m/s), pd (m)
 
-% Dynamic outlier thresholds: mean 3 sigma computed from data
-mean_x = mean(abs(veh_flow_v(:,1)), 'omitnan');
-std_x  = std(veh_flow_v(:,1), 'omitnan');
-mean_y = mean(abs(veh_flow_v(:,2)), 'omitnan');
-std_y  = std(veh_flow_v(:,2), 'omitnan');
+% Online outlier gating: sliding window mean + 3*sigma
+% Precompute per-step thresholds using only PAST data (causal)
+W = 200;   % window size (~5 seconds at 40Hz)
+FALLBACK_THR = 5.0;  % conservative fallback before buffer fills (m/s)
 
-VEL_THRESHOLD_x = mean_x + 3 * std_x;
-VEL_THRESHOLD_y = mean_y + 3 * std_y;
+VEL_THR_x = zeros(N, 1);
+VEL_THR_y = zeros(N, 1);
+
+for k = 1:N
+    win_start = max(1, k - W);
+    win_x = veh_flow_v(win_start:k-1, 1);  % only past samples (not current)
+    win_y = veh_flow_v(win_start:k-1, 2);
+    
+    if length(win_x) >= 20  % need enough samples for meaningful statistics
+        VEL_THR_x(k) = mean(abs(win_x), 'omitnan') + 3 * std(win_x, 'omitnan');
+        VEL_THR_y(k) = mean(abs(win_y), 'omitnan') + 3 * std(win_y, 'omitnan');
+    else
+        VEL_THR_x(k) = FALLBACK_THR;
+        VEL_THR_y(k) = FALLBACK_THR;
+    end
+end
 
 fprintf('====================================================\n');
-fprintf('Optical Flow Gating Thresholds (mean + 3*sigma):\n');
-fprintf('  X-axis: mean=%.3f, std=%.3f -> threshold=%.3f m/s\n', mean_x, std_x, VEL_THRESHOLD_x);
-fprintf('  Y-axis: mean=%.3f, std=%.3f -> threshold=%.3f m/s\n', mean_y, std_y, VEL_THRESHOLD_y);
+fprintf('Online Gating: sliding window W=%d (~%.1f s)\n', W, W/Delta);
+fprintf('  Threshold X range: [%.3f, %.3f] m/s\n', min(VEL_THR_x), max(VEL_THR_x));
+fprintf('  Threshold Y range: [%.3f, %.3f] m/s\n', min(VEL_THR_y), max(VEL_THR_y));
+fprintf('  Fallback (first %d samples): %.1f m/s\n', 20, FALLBACK_THR);
 fprintf('====================================================\n');
 
 %% 5. Filter Loops (EKF, UKF, REKF, RUKF)
@@ -96,7 +110,7 @@ X_ukf = zeros(16, N); X_ukf(:,1) = x0; P_ukf = P0;
 X_rekf= zeros(16, N); X_rekf(:,1)= x0; P_rekf= P0; theta_rekf = zeros(N, 1);
 X_rukf= zeros(16, N); X_rukf(:,1)= x0; P_rukf= P0; theta_rukf = zeros(N, 1);
 
-% EKF
+% EKF (with gating statistics)
 tic;
 gated_x = 0; gated_y = 0; flow_total = 0;
 for k = 1:N-1
@@ -106,8 +120,8 @@ for k = 1:N-1
     else
         y_k = [veh_flow_v(k,1:2)'; baro_h(k,1)]; R_k = R_flow;
         flow_total = flow_total + 1;
-        if abs(y_k(1)) > VEL_THRESHOLD_x, R_k(1,1) = R_k(1,1) * 1e6; gated_x = gated_x + 1; end
-        if abs(y_k(2)) > VEL_THRESHOLD_y, R_k(2,2) = R_k(2,2) * 1e6; gated_y = gated_y + 1; end
+        if abs(y_k(1)) > VEL_THR_x(k), R_k(1,1) = R_k(1,1) * 1e6; gated_x = gated_x + 1; end
+        if abs(y_k(2)) > VEL_THR_y(k), R_k(2,2) = R_k(2,2) * 1e6; gated_y = gated_y + 1; end
     end
     
     [X_ekf(:,k+1), P_ekf] = EKF_UAV(X_ekf(:,k), y_k, P_ekf, R_k, dth, dvk, Delta_theta_n, Delta_v_n, wb, ab, dt, md);
@@ -124,8 +138,8 @@ for k = 1:N-1
     if strcmp(md, 'gps'), y_k = [gps_denied(k,1:5)'; baro_h(k,1)]; R_k = R_gps;
     else
         y_k = [veh_flow_v(k,1:2)'; baro_h(k,1)]; R_k = R_flow;
-        if abs(y_k(1)) > VEL_THRESHOLD_x, R_k(1,1) = R_k(1,1) * 1e6; end
-        if abs(y_k(2)) > VEL_THRESHOLD_y, R_k(2,2) = R_k(2,2) * 1e6; end
+        if abs(y_k(1)) > VEL_THR_x(k), R_k(1,1) = R_k(1,1) * 1e6; end
+        if abs(y_k(2)) > VEL_THR_y(k), R_k(2,2) = R_k(2,2) * 1e6; end
     end
 
     [X_ukf(:,k+1), P_ukf] = UKF_UAV(X_ukf(:,k), y_k, P_ukf, R_k, dth, dvk, Delta_theta_n, Delta_v_n, wb, ab, dt, md);
@@ -141,8 +155,8 @@ for k = 1:N-1
     if strcmp(md, 'gps'), y_k = [gps_denied(k,1:5)'; baro_h(k,1)]; R_k = R_gps;
     else
         y_k = [veh_flow_v(k,1:2)'; baro_h(k,1)]; R_k = R_flow;
-        if abs(y_k(1)) > VEL_THRESHOLD_x, R_k(1,1) = R_k(1,1) * 1e6; end
-        if abs(y_k(2)) > VEL_THRESHOLD_y, R_k(2,2) = R_k(2,2) * 1e6; end
+        if abs(y_k(1)) > VEL_THR_x(k), R_k(1,1) = R_k(1,1) * 1e6; end
+        if abs(y_k(2)) > VEL_THR_y(k), R_k(2,2) = R_k(2,2) * 1e6; end
     end
 
     [X_rekf(:,k+1), P_rekf, theta_rekf(k)] = REKF_UAV(X_rekf(:,k), y_k, P_rekf, R_k, dth, dvk, Delta_theta_n, Delta_v_n, wb, ab, dt, md, c_rekf);
@@ -158,8 +172,8 @@ for k = 1:N-1
     if strcmp(md, 'gps'), y_k = [gps_denied(k,1:5)'; baro_h(k,1)]; R_k = R_gps;
     else
         y_k = [veh_flow_v(k,1:2)'; baro_h(k,1)]; R_k = R_flow;
-        if abs(y_k(1)) > VEL_THRESHOLD_x, R_k(1,1) = R_k(1,1) * 1e6; end
-        if abs(y_k(2)) > VEL_THRESHOLD_y, R_k(2,2) = R_k(2,2) * 1e6; end
+        if abs(y_k(1)) > VEL_THR_x(k), R_k(1,1) = R_k(1,1) * 1e6; end
+        if abs(y_k(2)) > VEL_THR_y(k), R_k(2,2) = R_k(2,2) * 1e6; end
     end
 
     [X_rukf(:,k+1), P_rukf, theta_rukf(k)] = RUKF_UAV(X_rukf(:,k), y_k, P_rukf, R_k, dth, dvk, Delta_theta_n, Delta_v_n, wb, ab, dt, md, c_rukf);
