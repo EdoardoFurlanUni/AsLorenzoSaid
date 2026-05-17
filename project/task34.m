@@ -12,12 +12,16 @@
 
 clear; clc; close all;
 
-data_num  = '49'; % SELECT dataset 48 or 49 --> change c_rekf and c_rukf
-
 % Robustness parameters (TUNED: optimized for minimum 3D Position RMSE)
 % c_grid = [1e-12, 1e-11, 1e-10, 1e-09, 1e-08, 1e-07, 1e-06, 1e-05] for tuning
-c_rekf = 1e-06; % 1e-08 IF dataset 48, 1e-06 IF dataset 49
-c_rukf = 1e-07; % 1e-07 IF dataset 48, 1e-07 IF dataset 49
+data_ids = {'48'; '49'};
+c_rekf_vals = [1e-08; 1e-06];
+c_rukf_vals = [1e-07; 1e-07];
+params = table(c_rekf_vals, c_rukf_vals, 'RowNames', data_ids);
+
+data_num  = '48'; % SELECT dataset 48 or 49
+c_rekf = params{data_num, 'c_rekf_vals'};
+c_rukf = params{data_num, 'c_rukf_vals'};
 
 %% 1. Setup paths and load data  
 project_dir = fileparts(mfilename('fullpath'));
